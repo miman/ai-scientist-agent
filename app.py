@@ -99,23 +99,46 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
 
 def agent_searcher(prompt: str) -> Optional[str]:
     print(f"🕵️‍♂️ [Agent 1: Sök] Analyserar om nätverkssökning krävs...", flush=True)
+    
+    # Engelskt systemprompt för maximal träffsäkerhet i triagen
     decision_prompt = (
-        "Du är en intelligent triage-agent. Analysera om vi behöver söka på internet efter aktuell dokumentation eller API-syntax.\n"
-        "- Om ja: Svara ENBART med en kort söksträng.\n"
-        "- Om nej (enkel logik/standardfunktion): Svara exakt med ordet 'NEJ'."
+        "You are a triage agent for a code generation pipeline.\n"
+        "Analyze if we need to search the internet for updated documentation, external libraries, or specific API syntax to solve the user's request.\n\n"
+        "You MUST respond in EXACTLY one of the following two formats (no other text or explanation):\n"
+        "DECISION: NO\n"
+        "DECISION: YES | SEARCH_QUERY: your optimized search keywords here"
     )
-    decision = call_hermes_llm(decision_prompt, prompt, model_name=MODEL_CONFIG["searcher"]).strip().strip('"').strip("'")
-    if decision.upper().startswith("NEJ"):
+    
+    raw_decision = call_hermes_llm(decision_prompt, prompt, model_name=MODEL_CONFIG["searcher"]).strip()
+    
+    if "DECISION: NO" in raw_decision:
         print("💡 [Agent 1: Sök] Ingen sökning krävs. Använder intern kunskap.", flush=True)
         return None
-    print(f"🌐 [Agent 1: Sök] Agenten beslutade att söka: '{decision}'", flush=True)
-    return tool_web_search(decision)
+        
+    if "DECISION: YES" in raw_decision and "SEARCH_QUERY:" in raw_decision:
+        search_query = raw_decision.split("SEARCH_QUERY:")[-1].strip().strip('"').strip("'")
+        if search_query:
+            print(f"🌐 [Agent 1: Sök] Agenten beslutade att söka efter: '{search_query}'", flush=True)
+            return tool_web_search(search_query)
+            
+    # Fallback om modellen blandar formaten men ändå vill söka
+    fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").strip().strip('"').strip("'")
+    if fallback_query and len(fallback_query) > 1 and "DECISION" anisotropy not in fallback_query:
+        print(f"🌐 [Agent 1: Sök] Fallback-sökning efter: '{fallback_query}'", flush=True)
+        return tool_web_search(fallback_query)
+        
+    print("⚠️ [Agent 1: Sök] Kunde inte tolka beslut eller söksträngen blev tom. Skippar sökning.", flush=True)
+    return None
 
 def agent_processor(raw_data: str, prompt_id: str):
     print(f"🧹 [Agent 2: Processor] Rensar data...", flush=True)
-    cleaned_data = call_hermes_llm("Extrahera kodrelevanta fakta från texten.", raw_data, model_name=MODEL_CONFIG["processor"])
+    # Rensar data på engelska för bättre struktur
+    cleaned_data = call_hermes_llm(
+        "You are a data processing assistant. Extract all code-relevant facts, API specifications, and documentation details from the text.", 
+        raw_data, 
+        model_name=MODEL_CONFIG["processor"]
+    )
     
-    # Lokal trådsäker ChromaDB-anslutning
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
     try:
@@ -127,7 +150,6 @@ def agent_processor(raw_data: str, prompt_id: str):
 def agent_expert(original_prompt: str, prompt_id: str):
     print(f"🧠 [Agent 3: Expert] Skapar kodlösning...", flush=True)
     
-    # Lokal trådsäker ChromaDB-anslutning
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
     try:
@@ -137,25 +159,30 @@ def agent_expert(original_prompt: str, prompt_id: str):
         context = ""
         
     return call_hermes_llm(
-        "Du är en AI Code Scientist. Skriv en komplett, optimal och ren kodlösning.",
-        f"Kontext:\n{context}\n\nProblem: {original_prompt}",
+        "You are an expert AI Code Scientist. Write a complete, optimal, secure, and production-ready code solution that fulfills all user requirements. Always write clean code with proper error handling.",
+        f"Fetched Documentation/Context:\n{context}\n\nUser Requirements (Might be in Swedish):\n{original_prompt}",
         model_name=MODEL_CONFIG["expert"]
     )
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Granskar koden (Försök {loop_count})...", flush=True)
+    
     system_prompt = (
-        "Du är en kodgranskare. Din uppgift är att kontrollera om koden uppfyller kravet.\n"
-        "Om koden är korrekt och löser uppgiften, skriv ordet 'GODKÄND' någonstans i ditt svar.\n"
-        "Om koden har fel eller kan förbättras, skriv 'UNDERKÄND' och förklara vad som ska ändras."
+        "You are a strict and cynical Senior Code Reviewer.\n"
+        "Your task is to thoroughly audit the proposed code solution against the original requirements.\n\n"
+        "You MUST include exactly one of the following verdict tokens somewhere in your response:\n"
+        "VERDICT: APPROVED (Only if the code is 100% flawless, fully functional, and matches all requirements)\n"
+        "VERDICT: REJECTED (If there is even a minor bug, missing requirement, or room for structural improvement)\n\n"
+        "Provide a clear, technical, step-by-step feedback explanation for the developer."
     )
-    review_result = call_hermes_llm(system_prompt, f"KRAV:\n{original_prompt}\n\nKOD:\n{solution}", model_name=MODEL_CONFIG["critic"])
     
-    # KORRIGERAD: Skriv ut hela kritiken direkt i loggen så du ser exakt vad den säger!
-    print(f"\n💬 [Critic Feedback Försök {loop_count}]:\n{review_result}\n" + "-"*40, flush=True)
+    review_result = call_hermes_llm(system_prompt, f"ORIGINAL REQUIREMENTS:\n{original_prompt}\n\nPROPOSED CODE:\n{solution}", model_name=MODEL_CONFIG["critic"])
     
-    # KORRIGERAD: Gör sökningen mer flexibel (strunta i exakt radbrytning eller skiftläge)
-    if "GODKÄND" in review_result.upper() and "UNDERKÄND" not in review_result.upper():
+    print(f"\n💬 [Critic Feedback Försök {loop_count}]:\n{review_result}", flush=True)
+    print("-" * 40, flush=True)
+    
+    # Python-logiken kollar nu efter det engelska mönstret
+    if "APPROVED" in review_result.upper() and "REJECTED" not in review_result.upper():
         return True, review_result
     return False, review_result
 
