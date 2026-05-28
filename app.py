@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Optional
 from duckduckgo_search import DDGS
 import chromadb
+from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 
 app = FastAPI(title="Hermes AI Code Scientist API")
 
@@ -46,12 +47,10 @@ def init_sqlite():
 init_sqlite()
 
 # En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
-# KORRIGERAD: Returnerar nu en fejkad embedding-vektor i rätt format 
-# så att ChromaDB:s längd-validering blir nöjd (utan att räkna på riktigt).
-class FakeEmbeddingFunction:
-    def __call__(self, input):
-        # ChromaDB förväntar sig en lista av listor (en vektor per dokument)
-        # Om vi skickar in ett dokument, ger vi den en lista med en fejkad 1-dimensionell vektor.
+# Importera EmbeddingFunction-protokollet från ChromaDB överst i app.py (eller lägg till det)
+class FakeEmbeddingFunction(EmbeddingFunction):
+    def __call__(self, input: Documents) -> Embeddings:
+        # Returnera en fejkad 1-dimensionell vektor per dokument
         if isinstance(input, str):
             return [[0.0]]
         return [[0.0] for _ in input]
