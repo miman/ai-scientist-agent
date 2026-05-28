@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  hermes_api:
+    build: .
+    container_name: hermes_api_server
+    ports:
+      - "8500:8500"
+    environment:
+      - CHROMA_HOST=chromadb
+      - OLLAMA_URL=${OLLAMA_URL}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "host.containers.internal:host-gateway"
+    volumes:
+      - .:/app
+      - sqlite_data:/app/db_data
+      - chroma_cache:/root/.cache/chroma # FIX: Sparar embedding-modellen permanent!
+    depends_on:
+      - chromadb
+    networks:
+      - hermes-net
+
+  chromadb:
+    image: docker.io/chromadb/chroma:latest # FIX: Tillagd fullständig URL för Podman
+    container_name: chromadb
+    volumes:
+      - chroma_data:/chroma
+    ports:
+      - "8000:8000"
+    networks:
+      - hermes-net
+
+volumes:
+  chroma_data:
+  sqlite_data:
+  chroma_cache:
+
+networks:
+  hermes-net:
+    driver: bridge

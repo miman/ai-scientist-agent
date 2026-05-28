@@ -1,0 +1,4 @@
+{
+    "prompt": "Skriv en optimerad SQL-fråga för att hitta dubbletter i en användartabell.",
+    "webhook_url": "https://din-externa-tjanst.se/api/webhook-mottagare"
+}
