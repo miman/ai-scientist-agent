@@ -49,7 +49,6 @@ init_sqlite()
 # En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
 class FakeEmbeddingFunction(EmbeddingFunction):
     def __init__(self):
-        # Tystar framtida ChromaDB-krav
         pass
 
     def __call__(self, input: Documents) -> Embeddings:
@@ -59,6 +58,10 @@ class FakeEmbeddingFunction(EmbeddingFunction):
     
     def name(self) -> str:
         return "FakeEmbeddingFunction"
+        
+    def get_config(self) -> dict:
+        # Tystar ChromaDB types.py:945 varningen permanent
+        return {"model": "fake"}
 
 # ==========================================
 # 1. PYDANTIC SCHEMAN
@@ -172,17 +175,19 @@ def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[
         "You are a strict and cynical Senior Code Reviewer.\n"
         "Your task is to thoroughly audit the proposed code solution against the original requirements.\n\n"
         "You MUST include exactly one of the following verdict tokens somewhere in your response:\n"
-        "VERDICT: APPROVED (Only if the code is 100% flawless, fully functional, and matches all requirements)\n"
+        "VERDICT: APPROVED (Only if the code is 100% flawless and matches all requirements)\n"
         "VERDICT: REJECTED (If there is even a minor bug, missing requirement, or room for structural improvement)\n\n"
         "Provide a clear, technical, step-by-step feedback explanation for the developer."
     )
     
     review_result = call_hermes_llm(system_prompt, f"ORIGINAL REQUIREMENTS:\n{original_prompt}\n\nPROPOSED CODE:\n{solution}", model_name=MODEL_CONFIG["critic"])
     
-    print(f"\n💬 [Critic Feedback Försök {loop_count}]:\n{review_result}", flush=True)
-    print("-" * 40, flush=True)
+    # TVINGA UT UTSKRIFTEN: Gör en rå print direkt så vi garanterat ser texten i Podman
+    print(f"\n================ CRITIC FEEDBACK (Loop {loop_count}) ================", flush=True)
+    print(review_result, flush=True)
+    print("===============================================================\n", flush=True)
     
-    # Python-logiken kollar nu efter det engelska mönstret
+    # MATCHNING: Kolla efter de ENGELSKA orden APPROVED / REJECTED
     if "APPROVED" in review_result.upper() and "REJECTED" not in review_result.upper():
         return True, review_result
     return False, review_result

@@ -13,9 +13,11 @@ En perfekt testfråga ska uppfylla följande kriterier:
 Kopiera och skicka in följande prompt till din /api/ask-ändpunkt:
 
 ```JSON
-{
-  "prompt": "Write a complete and robust Node.js function using ES modules (import statements) that leverages the official '@google/genai' SDK to stream responses from the 'gemini-2.5-flash' model. The function must accept a text prompt as an argument, securely handle the API key via environment variables, and implement a resilient retry mechanism with exponential backoff to handle 429 (Rate Limit) or 503 (Service Unavailable) errors gracefully. The streamed chunks must be written directly to the console (process.stdout) in real-time as they arrive."
-}
+curl -X POST http://localhost:8500/api/ask \
+     -H "Content-Type: application/json" \
+     -d "{
+       \"prompt\": \"Write a complete and robust Node.js function using ES modules (import statements) that leverages the official '@google/genai' SDK to stream responses from the 'gemini-2.5-flash' model. The function must accept a text prompt as an argument, securely handle the API key via environment variables, and implement a resilient retry mechanism with exponential backoff to handle 429 (Rate Limit) or 503 (Service Unavailable) errors gracefully. The streamed chunks must be written directly to the console (process.stdout) in real-time as they arrive.\"
+     }"
 ```
 
 🕵️‍♂️ Vad som kommer hända under huven (och vad du ska hålla utkik efter i loggarna!)
