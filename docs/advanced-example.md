@@ -14,7 +14,7 @@ Kopiera och skicka in följande prompt till din /api/ask-ändpunkt:
 
 ```JSON
 {
-  "prompt": "Skriv en komplett och robust Node.js-funktion (med ES-moduler/import) som använder det officiella biblioteket '@google/genai' för att strömma (stream) ett svar från modellen 'gemini-2.5-flash'. Funktionen måste ta emot en text-prompt, hantera API-nyckeln säkert via miljövariabler, och ha en inbyggd retry-mekanism med exponential backoff om Google kastar ett 429 (Rate Limit) eller 503-fel. Funktionen ska skriva ut strömmen direkt till konsolen (process.stdout) allteftersom tecknen kommer."
+  "prompt": "Write a complete and robust Node.js function using ES modules (import statements) that leverages the official '@google/genai' SDK to stream responses from the 'gemini-2.5-flash' model. The function must accept a text prompt as an argument, securely handle the API key via environment variables, and implement a resilient retry mechanism with exponential backoff to handle 429 (Rate Limit) or 503 (Service Unavailable) errors gracefully. The streamed chunks must be written directly to the console (process.stdout) in real-time as they arrive."
 }
 ```
 
