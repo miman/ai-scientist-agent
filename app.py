@@ -50,7 +50,7 @@ def init_sqlite():
 
 init_sqlite()
 
-chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
+# chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
 
 # KORRIGERAD: En helt tom fejk-klass som lurar ChromaDB-klienten 
 # att inte ladda ner någonting alls över internet.
@@ -61,10 +61,10 @@ class FakeEmbeddingFunction:
     def name(self) -> str:
         return "FakeEmbeddingFunction"
 
-collection = chroma_client.get_or_create_collection(
-    name="search_knowledge",
-    embedding_function=FakeEmbeddingFunction()
-)
+# collection = chroma_client.get_or_create_collection(
+#    name="search_knowledge",
+#    embedding_function=FakeEmbeddingFunction()
+# )
 
 # ==========================================
 # 1. PYDANTIC SCHEMAN (För API-input)
@@ -144,19 +144,32 @@ def agent_processor(raw_data: str, prompt_id: str):
         model_name=MODEL_CONFIG["processor"]
     )
     
+    # KORRIGERAD: Initiera ChromaDB lokalt för denna tråd
+    client = chromadb.HttpClient(host="chromadb", port=8000)
+    coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
+    
     try:
-        collection.delete(ids=[f"doc_{prompt_id}"])
+        coll.delete(ids=[f"doc_{prompt_id}"])
     except:
         pass
         
-    collection.add(documents=[cleaned_data], ids=[f"doc_{prompt_id}"])
+    coll.add(documents=[cleaned_data], ids=[f"doc_{prompt_id}"])
     return cleaned_data
 
 # --- AGENT 3: Expertagenten ---
 def agent_expert(original_prompt: str, prompt_id: str):
     print(f"🧠 [Agent 3: Expert] Skapar kodlösning med {MODEL_CONFIG['expert']}...")
-    chroma_result = collection.get(ids=[f"doc_{prompt_id}"])
-    context = chroma_result['documents'][0] if (chroma_result and chroma_result['documents']) else ""
+    
+    # KORRIGERAD: Initiera ChromaDB lokalt för denna tråd
+    client = chromadb.HttpClient(host="chromadb", port=8000)
+    coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
+    
+    try:
+        chroma_result = coll.get(ids=[f"doc_{prompt_id}"])
+        context = chroma_result['documents'][0] if (chroma_result and chroma_result['documents']) else ""
+    except:
+        context = ""
+        
     return call_hermes_llm(
         "Du är en AI Code Scientist. Skriv en komplett, optimal och ren kodlösning.", 
         f"Hämtad Dokumentation (Valfri kontext):\n{context}\n\nProblem: {original_prompt}",
@@ -212,11 +225,14 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
         if raw_info:
             agent_processor(raw_info, prompt_id)
         else:
+            # KORRIGERAD: Lokal initiering för failsafe-blocket
+            client = chromadb.HttpClient(host="chromadb", port=8000)
+            coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
             try:
-                collection.delete(ids=[f"doc_{prompt_id}"])
+                coll.delete(ids=[f"doc_{prompt_id}"])
             except:
                 pass
-            collection.add(
+            coll.add(
                 documents=["Ingen extern nätverksdokumentation behövdes för denna uppgift. Lös uppgiften baserat på din inbyggda kunskap."], 
                 ids=[f"doc_{prompt_id}"]
             )
