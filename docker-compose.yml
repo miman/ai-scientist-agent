@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   hermes_api:
-    build: .
+    image: localhost/ai-scientist_hermes_api:latest # FIX: Använder en förbyggd image för att slippa podman-compose bygg-buggar
     container_name: hermes_api_server
     ports:
       - "8500:8500"
@@ -15,14 +15,14 @@ services:
     volumes:
       - .:/app
       - sqlite_data:/app/db_data
-      - chroma_cache:/root/.cache/chroma # FIX: Sparar embedding-modellen permanent!
+      - chroma_cache:/root/.cache/chroma
     depends_on:
       - chromadb
     networks:
       - hermes-net
 
   chromadb:
-    image: docker.io/chromadb/chroma:latest # FIX: Tillagd fullständig URL för Podman
+    image: docker.io/chromadb/chroma:latest
     container_name: chromadb
     volumes:
       - chroma_data:/chroma

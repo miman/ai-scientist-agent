@@ -28,17 +28,17 @@ COMPOSE_CMD="podman-compose"
 
 echo ""
 echo -e "${BLUE}🧹 Rensar gamla containrar och cache för att förhindra fel...${NC}"
-# 1. Stoppa och ta bort eventuella gamla instanser av appen
 $COMPOSE_CMD down
-
-# 2. Tvinga Podman att rensa byggcachen (så att ändringar i app.py läses in på nytt)
 podman builder prune -f
 
 echo ""
-echo -e "${BLUE}Bygger och startar containrar via Podman från grunden...${NC}"
+echo -e "${BLUE}🛠️  Bygger API-image manuellt med podman...${NC}"
+# Detta kommando bygger containern direkt och helt säkert utan compose-buggar
+podman build -t localhost/ai-scientist_hermes_api:latest .
 
-# Starta miljön och tvinga fram en helt ny kompilation
-$COMPOSE_CMD up --build -d
+echo ""
+echo -e "${BLUE}🚀 Startar containrar via Podman...${NC}"
+$COMPOSE_CMD up -d
 
 echo ""
 echo -e "${GREEN}===============================================${NC}"
