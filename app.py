@@ -47,10 +47,12 @@ def init_sqlite():
 init_sqlite()
 
 # En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
-# Importera EmbeddingFunction-protokollet från ChromaDB överst i app.py (eller lägg till det)
 class FakeEmbeddingFunction(EmbeddingFunction):
+    def __init__(self):
+        # Tystar framtida ChromaDB-krav
+        pass
+
     def __call__(self, input: Documents) -> Embeddings:
-        # Returnera en fejkad 1-dimensionell vektor per dokument
         if isinstance(input, str):
             return [[0.0]]
         return [[0.0] for _ in input]
