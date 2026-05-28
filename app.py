@@ -57,10 +57,13 @@ chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
 class FakeEmbeddingFunction:
     def __call__(self, input):
         return []
+    
+    def name(self) -> str:
+        return "FakeEmbeddingFunction"
 
 collection = chroma_client.get_or_create_collection(
     name="search_knowledge",
-    embedding_function=FakeEmbeddingFunction() # <-- Tvinga in denna här!
+    embedding_function=FakeEmbeddingFunction()
 )
 
 # ==========================================
