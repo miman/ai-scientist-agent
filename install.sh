@@ -34,7 +34,7 @@ podman builder prune -f
 echo ""
 echo -e "${BLUE}🛠️  Bygger API-image manuellt med podman...${NC}"
 # Detta kommando bygger containern direkt och helt säkert utan compose-buggar
-podman build -f Dockerfile -t localhost/ai-scientist_hermes_api:latest "$PWD"
+podman build --no-cache -f Dockerfile -t localhost/ai-scientist_hermes_api:latest "$PWD"
 
 echo ""
 echo -e "${BLUE}🚀 Startar containrar via Podman...${NC}"
