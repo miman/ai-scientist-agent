@@ -123,7 +123,7 @@ def agent_searcher(prompt: str) -> Optional[str]:
             
     # Fallback om modellen blandar formaten men ändå vill söka
     fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").strip().strip('"').strip("'")
-    if fallback_query and len(fallback_query) > 1 and "DECISION" anisotropy not in fallback_query:
+    if fallback_query and len(fallback_query) > 1 and "DECISION" not in fallback_query:
         print(f"🌐 [Agent 1: Sök] Fallback-sökning efter: '{fallback_query}'", flush=True)
         return tool_web_search(fallback_query)
         
