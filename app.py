@@ -14,27 +14,22 @@ app = FastAPI(title="Hermes AI Code Scientist API")
 # ==========================================
 # CONFIGURATION: MODELLER FÖR AGENTERNA
 # ==========================================
-# KORRIGERAD: Matchar nu din readme.md och GPU-optimering
 MODEL_CONFIG = {
-    "searcher": "qwen3.5:9b",          # Används även för att fatta beslut om sökning krävs
-    "processor": "qwen3.5:9b",         # Snabb modell för att rensa HTML/data
-    "expert": "qwen3.5:9b",     # Dedikerad kodmodell för att skriva lösningen
-    "critic": "qwen3.5:9b"        # Tänkande modell för att hitta dolda buggar
+    "searcher": "qwen3.5:9b",
+    "processor": "qwen3.5:9b",
+    "expert": "qwen3.5:9b",
+    "critic": "qwen3.5:9b"
 }
 
 # ==========================================
 # 0. INITIERING AV DATABASER
 # ==========================================
-
-# KORRIGERAD: Ändrad till /app/db_data/ för att lagras i den persistenta Docker-volymen
 DB_DIR = "/app/db_data"
 DB_PATH = os.path.join(DB_DIR, "agent_archive.db")
 
 def init_sqlite():
-    # Säkerställ att mappen för volymen existerar i containern
     if not os.path.exists(DB_DIR):
         os.makedirs(DB_DIR, exist_ok=True)
-        
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -50,26 +45,16 @@ def init_sqlite():
 
 init_sqlite()
 
-# chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
-
-# KORRIGERAD: En helt tom fejk-klass som lurar ChromaDB-klienten 
-# att inte ladda ner någonting alls över internet.
+# En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
 class FakeEmbeddingFunction:
     def __call__(self, input):
         return []
-    
     def name(self) -> str:
         return "FakeEmbeddingFunction"
 
-# collection = chroma_client.get_or_create_collection(
-#    name="search_knowledge",
-#    embedding_function=FakeEmbeddingFunction()
-# )
-
 # ==========================================
-# 1. PYDANTIC SCHEMAN (För API-input)
+# 1. PYDANTIC SCHEMAN
 # ==========================================
-
 class QuestionRequest(BaseModel):
     prompt: str
     webhook_url: Optional[str] = None
@@ -77,7 +62,6 @@ class QuestionRequest(BaseModel):
 # ==========================================
 # 2. AGENTERNAS LOGIK
 # ==========================================
-
 def tool_web_search(query: str):
     query = query.strip('"').strip("'")
     try:
@@ -88,82 +72,57 @@ def tool_web_search(query: str):
         return f"Sökning misslyckades: {str(e)}"
 
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
-    """
-    Anropar Ollama med den modell som skickas med från respektive agent.
-    """
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
     full_prompt = f"System: {system_prompt}\n\nUser: {user_content}\n\nAssistant:"
-    
     payload = {
         "model": model_name,
         "prompt": full_prompt,
         "stream": False,
-        "options": {
-            "temperature": 0.2
-        }
+        "options": {"temperature": 0.2},
+        "keep_alive": "30m"  # Håll modellen laddad i 30 min i ditt VRAM
     }
-    
     try:
         endpoint = f"{ollama_url.rstrip('/')}/api/generate"
         response = requests.post(endpoint, json=payload, timeout=120)
         response.raise_for_status()
         return response.json()["response"]
     except Exception as e:
-        print(f"⚠️ Fel vid anrop till Ollama ({model_name}) på {ollama_url}: {e}")
-        return f"Kunde inte generera svar på grund av fel: {str(e)}"
+        print(f"⚠️ Fel vid anrop till Ollama ({model_name}): {e}", flush=True)
+        return f"Kunde inte generera svar: {str(e)}"
 
-# --- AGENT 1: Sökagenten ---
 def agent_searcher(prompt: str) -> Optional[str]:
-    print(f"🕵️‍♂️ [Agent 1: Sök] Analyserar om nätverkssökning krävs med {MODEL_CONFIG['searcher']}...")
-    
+    print(f"🕵️‍♂️ [Agent 1: Sök] Analyserar om nätverkssökning krävs...", flush=True)
     decision_prompt = (
-        "Du är en intelligent triage-agent för en kod-pipeline.\n"
-        "Din uppgift är att analyserar om vi faktiskt behöver söka på internet efter aktuell dokumentation, "
-        "externa bibliotek, API-syntaxer eller specifik information för att kunna lösa problemet.\n\n"
-        "Instruktioner:\n"
-        "- Om problemet kräver sökning (t.ex. externa bibliotek, nya ramverk, APIer): Svara ENBART med en optimerad, kort söksträng för DuckDuckGo.\n"
-        "- Om problemet är enkelt (standardalgoritmer, ren logik eller grundläggande funktioner som du redan behärskar till 100%): Svara exakt med ordet 'NEJ'.\n"
-        "Svara aldrig med citattecken eller extra förklaringar."
+        "Du är en intelligent triage-agent. Analysera om vi behöver söka på internet efter aktuell dokumentation eller API-syntax.\n"
+        "- Om ja: Svara ENBART med en kort söksträng.\n"
+        "- Om nej (enkel logik/standardfunktion): Svara exakt med ordet 'NEJ'."
     )
-    
     decision = call_hermes_llm(decision_prompt, prompt, model_name=MODEL_CONFIG["searcher"]).strip().strip('"').strip("'")
-    
-    if decision.upper() == "NEJ" or decision.upper().startswith("NEJ"):
-        print("💡 [Agent 1: Sök] Agenten bedömde att ingen sökning krävs. Använder intern kunskap direkt.")
+    if decision.upper().startswith("NEJ"):
+        print("💡 [Agent 1: Sök] Ingen sökning krävs. Använder intern kunskap.", flush=True)
         return None
-        
-    print(f"🌐 [Agent 1: Sök] Agenten beslutade att söka! Söksträng: '{decision}'")
+    print(f"🌐 [Agent 1: Sök] Agenten beslutade att söka: '{decision}'", flush=True)
     return tool_web_search(decision)
 
-# --- AGENT 2: Processagenten ---
 def agent_processor(raw_data: str, prompt_id: str):
-    print(f"🧹 [Agent 2: Processor] Rensar data med {MODEL_CONFIG['processor']}...")
-    cleaned_data = call_hermes_llm(
-        "Du är en databearbetare. Extrahera kodrelevanta fakta och API-detaljer från texten.", 
-        raw_data,
-        model_name=MODEL_CONFIG["processor"]
-    )
+    print(f"🧹 [Agent 2: Processor] Rensar data...", flush=True)
+    cleaned_data = call_hermes_llm("Extrahera kodrelevanta fakta från texten.", raw_data, model_name=MODEL_CONFIG["processor"])
     
-    # KORRIGERAD: Initiera ChromaDB lokalt för denna tråd
+    # Lokal trådsäker ChromaDB-anslutning
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
-    
     try:
         coll.delete(ids=[f"doc_{prompt_id}"])
-    except:
-        pass
-        
+    except: pass
     coll.add(documents=[cleaned_data], ids=[f"doc_{prompt_id}"])
     return cleaned_data
 
-# --- AGENT 3: Expertagenten ---
 def agent_expert(original_prompt: str, prompt_id: str):
-    print(f"🧠 [Agent 3: Expert] Skapar kodlösning med {MODEL_CONFIG['expert']}...")
+    print(f"🧠 [Agent 3: Expert] Skapar kodlösning...", flush=True)
     
-    # KORRIGERAD: Initiera ChromaDB lokalt för denna tråd
+    # Lokal trådsäker ChromaDB-anslutning
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
-    
     try:
         chroma_result = coll.get(ids=[f"doc_{prompt_id}"])
         context = chroma_result['documents'][0] if (chroma_result and chroma_result['documents']) else ""
@@ -171,36 +130,26 @@ def agent_expert(original_prompt: str, prompt_id: str):
         context = ""
         
     return call_hermes_llm(
-        "Du är en AI Code Scientist. Skriv en komplett, optimal och ren kodlösning.", 
-        f"Hämtad Dokumentation (Valfri kontext):\n{context}\n\nProblem: {original_prompt}",
+        "Du är en AI Code Scientist. Skriv en komplett, optimal och ren kodlösning.",
+        f"Kontext:\n{context}\n\nProblem: {original_prompt}",
         model_name=MODEL_CONFIG["expert"]
     )
 
-# --- AGENT 4: Critic-agent ---
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
-    print(f"⚖️ [Agent 4: Critic] Granskar koden med {MODEL_CONFIG['critic']} (Försök {loop_count})...")
-    
+    print(f"⚖️ [Agent 4: Critic] Granskar koden (Försök {loop_count})...", flush=True)
     system_prompt = (
-        "Du är en extremt noggrann och cynisk kodgranskare (Senior Code Reviewer).\n"
-        "Din uppgift är att avgöra om den föreslagna koden uppfyller ALLA ursprungliga krav.\n\n"
-        "Du MÅSTE inleda ditt svar på första raden med exakt ett av följande två format:\n"
-        "STATUS: GODKÄND - Om koden är perfekt och uppfyller alla krav.\n"
-        "STATUS: UNDERKÄND - Om det finns minsta lilla bugg eller missat krav.\n\n"
-        "Efter denna statusrad ger du din tekniska feedback och motivering till utvecklaren."
+        "Du är en cynisk kodgranskare. Du MÅSTE inleda ditt svar på första raden med exakt:\n"
+        "STATUS: GODKÄND - Om koden är perfekt.\n"
+        "STATUS: UNDERKÄND - Om det finns minsta fel.\n"
+        "Ge sedan din tekniska feedback."
     )
-    
-    user_content = f"URSPRUNGLIGA KRAV:\n{original_prompt}\n\nFÖRESLAGEN KODLÖSNING:\n{solution}"
-    review_result = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["critic"])
-    
-    print(f"💬 [Critic Feedback]:\n{review_result}\n" + "-"*40)
-    
+    review_result = call_hermes_llm(system_prompt, f"KRAV:\n{original_prompt}\n\nKOD:\n{solution}", model_name=MODEL_CONFIG["critic"])
     if "STATUS: GODKÄND" in review_result:
         return True, review_result
     return False, review_result
 
-# --- AGENT 5: Arkiveringsagenten ---
 def agent_archiver(original_prompt: str, final_solution: str) -> int:
-    print("🗄️ [Agent 5: Arkiv] Sparar slutresultat i databasen...")
+    print("🗄️ [Agent 5: Arkiv] Sparar slutresultat i SQLite...", flush=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO solutions (prompt, solution) VALUES (?, ?)", (original_prompt, final_solution))
@@ -210,32 +159,24 @@ def agent_archiver(original_prompt: str, final_solution: str) -> int:
     return inserted_id
 
 # ==========================================
-# 3. ASYNKRON ORKESTRERING
+# 3. ORKESTRERING (Körs i en ren tråd)
 # ==========================================
-
 def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
-    print(f"🚀 Startar agent-pipeline för: '{user_problem[:30]}...'")
+    print(f"🚀 Startar agent-pipeline för: '{user_problem[:40]}...'", flush=True)
     prompt_id = f"{hash(user_problem)}_{uuid.uuid4().hex[:8]}"
     loop_count = 1
-    current_prompt = user_problem
     
     try:
-        raw_info = agent_searcher(current_prompt)
-        
+        raw_info = agent_searcher(user_problem)
         if raw_info:
             agent_processor(raw_info, prompt_id)
         else:
-            # KORRIGERAD: Lokal initiering för failsafe-blocket
             client = chromadb.HttpClient(host="chromadb", port=8000)
             coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
             try:
                 coll.delete(ids=[f"doc_{prompt_id}"])
-            except:
-                pass
-            coll.add(
-                documents=["Ingen extern nätverksdokumentation behövdes för denna uppgift. Lös uppgiften baserat på din inbyggda kunskap."], 
-                ids=[f"doc_{prompt_id}"]
-            )
+            except: pass
+            coll.add(documents=["Använd intern kunskap."], ids=[f"doc_{prompt_id}"])
         
         while True:
             solution = agent_expert(user_problem, prompt_id)
@@ -243,60 +184,45 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             
             if approved or loop_count >= 10:
                 if loop_count >= 10 and not approved:
-                    print("⚠️ Max antal loopar (10) nådda utan godkännande. Arkiverar bästa försök.")
-                    
+                    print("⚠️ Max antal loopar nådda. Arkiverar bästa försök.", flush=True)
                 db_id = agent_archiver(user_problem, solution)
-                print(f"🎉 Klart! Sparat med ID: {db_id}")
+                print(f"🎉 Klart! Sparat i SQLite med ID: {db_id}", flush=True)
                 
                 if webhook_url:
-                    payload = {"status": "completed", "id": db_id, "prompt": user_problem, "solution": solution}
-                    try:
-                        requests.post(webhook_url, json=payload, timeout=10)
-                    except:
-                        pass
+                    try: requests.post(webhook_url, json={"status": "completed", "id": db_id}, timeout=10)
+                    except: pass
                 break
             else:
-                current_prompt = f"{user_problem} (Feedback från granskare: {feedback})"
-                raw_info = agent_searcher(current_prompt)
-                if raw_info:
-                    agent_processor(raw_info, prompt_id)
                 loop_count += 1
     except Exception as e:
-        print(f"❌ Ett kritiskt fel avbröt loopen: {e}")
+        print(f"❌ Kritiskt fel i pipeline-tråden: {e}", flush=True)
 
 # ==========================================
 # 4. REST API ENDPOINTS
 # ==========================================
-
 @app.post("/api/ask")
-async def ask_question(request: QuestionRequest, background_tasks: BackgroundTasks):
-    background_tasks.add_task(run_agent_pipeline_background, request.prompt, request.webhook_url)
+def ask_question(request: QuestionRequest):
+    # KORRIGERAD: Starta en helt fristående OS-tråd istället för BackgroundTasks
+    thread = threading.Thread(
+        target=run_agent_pipeline_background, 
+        args=(request.prompt, request.webhook_url)
+    )
+    thread.start()
+    
     return {
         "status": "processing",
-        "message": "Agent-loopen körs asynkront i bakgrunden."
+        "message": "Agent-loopen har startats i en dedikerad bakgrundstråd."
     }
 
 @app.get("/api/solutions/{solution_id}")
-async def get_solution(solution_id: int):
+def get_solution(solution_id: int):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT id, prompt, solution, timestamp FROM solutions WHERE id = ?", (solution_id,))
     row = cursor.fetchone()
     conn.close()
-    
-    if not row:
-        raise HTTPException(status_code=404, detail="Lösningen hittades inte i databasen.")
-        
+    if not row: raise HTTPException(status_code=404, detail="Hittades inte.")
     return {"id": row[0], "prompt": row[1], "solution": row[2], "timestamp": row[3]}
-
-@app.get("/api/solutions")
-async def get_all_solutions():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, prompt, timestamp FROM solutions ORDER BY timestamp DESC")
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"id": r[0], "prompt": r[1], "timestamp": r[2]} for r in rows]
 
 if __name__ == "__main__":
     import uvicorn
