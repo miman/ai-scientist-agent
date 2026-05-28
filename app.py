@@ -60,8 +60,11 @@ class FakeEmbeddingFunction(EmbeddingFunction):
         return "FakeEmbeddingFunction"
         
     def get_config(self) -> dict:
-        # Tystar ChromaDB types.py:945 varningen permanent
         return {"model": "fake"}
+
+    @classmethod
+    def build_from_config(cls, config: dict):
+        return cls()
 
 # ==========================================
 # 1. PYDANTIC SCHEMAN
