@@ -13,9 +13,8 @@ app = FastAPI(title="Hermes AI Code Scientist API")
 # ==========================================
 # CONFIGURATION: MODELLER FÖR AGENTERNA
 # ==========================================
-# Här kan du enkelt ändra vilka modeller dina agenter använder!
 MODEL_CONFIG = {
-    "searcher": "qwen3.5:9b",          # Snabb modell för att generera söksträngar
+    "searcher": "qwen3.5:9b",          # Används även för att fatta beslut om sökning krävs
     "processor": "qwen3.5:9b",         # Snabb modell för att rensa HTML/data
     "expert": "qwen3.5:9b",     # Dedikerad kodmodell för att skriva lösningen
     "critic": "qwen3.5:9b"        # Tänkande modell för att hitta dolda buggar
@@ -90,15 +89,34 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
         print(f"⚠️ Fel vid anrop till Ollama ({model_name}) på {ollama_url}: {e}")
         return f"Kunde inte generera svar på grund av fel: {str(e)}"
 
-# --- AGENT 1: Sökagenten ---
-def agent_searcher(prompt: str):
-    print(f"🕵️‍♂️ [Agent 1: Sök] Skapar söksträng med {MODEL_CONFIG['searcher']}...")
-    search_query = call_hermes_llm(
-        "Du är en sökexpert. Skapa en optimal, kort söksträng för DuckDuckGo baserat på problemet. Svara ENBART med söksträngen, inga citattecken.", 
-        prompt,
-        model_name=MODEL_CONFIG["searcher"]
+# --- AGENT 1: Sökagenten (Nu med beslutsfattande!) ---
+def agent_searcher(prompt: str) -> Optional[str]:
+    """
+    Använder LLM för att analysera om problemet kräver extern information (sökning).
+    Returnerar sökresultat om sökning gjordes, annars None.
+    """
+    print(f"🕵️‍♂️ [Agent 1: Sök] Analyserar om nätverkssökning krävs med {MODEL_CONFIG['searcher']}...")
+    
+    decision_prompt = (
+        "Du är en intelligent triage-agent för en kod-pipeline.\n"
+        "Din uppgift är att analysera om vi faktiskt behöver söka på internet efter aktuell dokumentation, "
+        "externa bibliotek, API-syntaxer eller specifik information för att kunna lösa problemet.\n\n"
+        "Instruktioner:\n"
+        "- Om problemet kräver sökning (t.ex. externa bibliotek, nya ramverk, APIer): Svara ENBART med en optimerad, kort söksträng för DuckDuckGo.\n"
+        "- Om problemet är enkelt (standardalgoritmer, ren logik eller grundläggande funktioner som du redan behärskar till 100%): Svara exakt med ordet 'NEJ'.\n"
+        "Svara aldrig med citattecken eller extra förklaringar."
     )
-    return tool_web_search(search_query)
+    
+    # Låt modellen ta beslutet
+    decision = call_hermes_llm(decision_prompt, prompt, model_name=MODEL_CONFIG["searcher"]).strip().strip('"').strip("'")
+    
+    # Tolka beslutet
+    if decision.upper() == "NEJ" or decision.upper().startswith("NEJ"):
+        print("💡 [Agent 1: Sök] Agenten bedömde att ingen sökning krävs. Använder intern kunskap direkt.")
+        return None
+        
+    print(f"🌐 [Agent 1: Sök] Agenten beslutade att söka! Söksträng: '{decision}'")
+    return tool_web_search(decision)
 
 # --- AGENT 2: Processagenten ---
 def agent_processor(raw_data: str, prompt_id: str):
@@ -121,14 +139,14 @@ def agent_processor(raw_data: str, prompt_id: str):
 def agent_expert(original_prompt: str, prompt_id: str):
     print(f"🧠 [Agent 3: Expert] Skapar kodlösning med {MODEL_CONFIG['expert']}...")
     chroma_result = collection.get(ids=[f"doc_{prompt_id}"])
-    context = chroma_result['documents'][0] if chroma_result['documents'] else ""
+    context = chroma_result['documents'][0] if (chroma_result and chroma_result['documents']) else ""
     return call_hermes_llm(
         "Du är en AI Code Scientist. Skriv en komplett, optimal och ren kodlösning.", 
-        f"Kontext:\n{context}\n\nProblem: {original_prompt}",
+        f"Hämtad Dokumentation (Valfri kontext):\n{context}\n\nProblem: {original_prompt}",
         model_name=MODEL_CONFIG["expert"]
     )
 
-# --- AGENT 4: Riktig Critic-agent (DeepSeek R1!) ---
+# --- AGENT 4: Critic-agent ---
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Granskar koden med {MODEL_CONFIG['critic']} (Försök {loop_count})...")
     
@@ -172,14 +190,32 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
     current_prompt = user_problem
     
     try:
+        # Agent 1 fattar beslut och gör eventuell sökning
         raw_info = agent_searcher(current_prompt)
-        agent_processor(raw_info, prompt_id)
+        
+        if raw_info:
+            # Endast om sökning gjordes körs Processorn och sparar i ChromaDB
+            agent_processor(raw_info, prompt_id)
+        else:
+            # Om ingen sökning behövdes sparar vi en standardkontext för att inte störa experten
+            try:
+                collection.delete(ids=[f"doc_{prompt_id}"])
+            except:
+                pass
+            collection.add(
+                documents=["Ingen extern nätverksdokumentation behövdes för denna uppgift. Lös uppgiften baserat på din inbyggda kunskap."], 
+                ids=[f"doc_{prompt_id}"]
+            )
         
         while True:
             solution = agent_expert(user_problem, prompt_id)
             approved, feedback = agent_critic(user_problem, solution, loop_count)
             
-            if approved or loop_count >= 3:
+            # Failsafe: Max 10 loopar
+            if approved or loop_count >= 10:
+                if loop_count >= 10 and not approved:
+                    print("⚠️ Max antal loopar (10) nådda utan godkännande. Arkiverar bästa försök.")
+                    
                 db_id = agent_archiver(user_problem, solution)
                 print(f"🎉 Klart! Sparat med ID: {db_id}")
                 
@@ -191,10 +227,13 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
                         pass
                 break
             else:
-                # Mata tillbaka feedbacken in i loopen för nästa försök
+                # Återmatning av kritikerns feedback till nästa försök
                 current_prompt = f"{user_problem} (Feedback från granskare: {feedback})"
+                
+                # Här söker vi igen fast specifikt baserat på felmeddelandet/feedbacken om det behövs
                 raw_info = agent_searcher(current_prompt)
-                agent_processor(raw_info, prompt_id)
+                if raw_info:
+                    agent_processor(raw_info, prompt_id)
                 loop_count += 1
     except Exception as e:
         print(f"❌ Ett kritiskt fel avbröt loopen: {e}")
