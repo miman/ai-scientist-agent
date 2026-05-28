@@ -87,19 +87,28 @@ def tool_web_search(query: str):
 
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
-    full_prompt = f"System: {system_prompt}\n\nUser: {user_content}\n\nAssistant:"
+    
+    # KORRIGERAD: Vi använder /api/chat och strukturerade roller för maximal Qwen-kompatibilitet
     payload = {
         "model": model_name,
-        "prompt": full_prompt,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content}
+        ],
         "stream": False,
         "options": {"temperature": 0.2},
-        "keep_alive": "30m"  # Håll modellen laddad i 30 min i ditt VRAM
+        "keep_alive": "30m"
     }
+    
     try:
-        endpoint = f"{ollama_url.rstrip('/')}/api/generate"
+        # KORRIGERAD: Ändrat endpoint till /api/chat
+        endpoint = f"{ollama_url.rstrip('/')}/api/chat"
         response = requests.post(endpoint, json=payload, timeout=120)
         response.raise_for_status()
-        return response.json()["response"]
+        
+        # KORRIGERAD: Hämtar svaret från det strukturerade chat-objektet
+        return response.json()["message"]["content"]
+        
     except Exception as e:
         print(f"⚠️ Fel vid anrop till Ollama ({model_name}): {e}", flush=True)
         return f"Kunde inte generera svar: {str(e)}"
