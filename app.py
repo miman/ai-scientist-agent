@@ -51,7 +51,12 @@ def init_sqlite():
 init_sqlite()
 
 chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
-collection = chroma_client.get_or_create_collection(name="search_knowledge")
+
+# KORRIGERAD: Tvinga klienten att inte initiera en lokal standard-embedding-funktion
+collection = chroma_client.get_or_create_collection(
+    name="search_knowledge",
+    embedding_function=None # Detta gör att servern (ChromaDB-containern) sköter allt!
+)
 
 # ==========================================
 # 1. PYDANTIC SCHEMAN (För API-input)
