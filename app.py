@@ -52,10 +52,15 @@ init_sqlite()
 
 chroma_client = chromadb.HttpClient(host="chromadb", port=8000)
 
-# KORRIGERAD: Tvinga klienten att inte initiera en lokal standard-embedding-funktion
+# KORRIGERAD: En helt tom fejk-klass som lurar ChromaDB-klienten 
+# att inte ladda ner någonting alls över internet.
+class FakeEmbeddingFunction:
+    def __call__(self, input):
+        return []
+
 collection = chroma_client.get_or_create_collection(
     name="search_knowledge",
-    embedding_function=None # Detta gör att servern (ChromaDB-containern) sköter allt!
+    embedding_function=FakeEmbeddingFunction() # <-- Tvinga in denna här!
 )
 
 # ==========================================
