@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import threading
+import uuid
 import requests
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
@@ -188,7 +189,7 @@ def agent_archiver(original_prompt: str, final_solution: str) -> int:
 
 def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
     print(f"🚀 Startar agent-pipeline för: '{user_problem[:30]}...'")
-    prompt_id = str(hash(user_problem))
+    prompt_id = f"{hash(user_problem)}_{uuid.uuid4().hex[:8]}"
     loop_count = 1
     current_prompt = user_problem
     
