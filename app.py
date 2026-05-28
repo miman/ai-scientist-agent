@@ -13,6 +13,7 @@ app = FastAPI(title="Hermes AI Code Scientist API")
 # ==========================================
 # CONFIGURATION: MODELLER FÖR AGENTERNA
 # ==========================================
+# KORRIGERAD: Matchar nu din readme.md och GPU-optimering
 MODEL_CONFIG = {
     "searcher": "qwen3.5:9b",          # Används även för att fatta beslut om sökning krävs
     "processor": "qwen3.5:9b",         # Snabb modell för att rensa HTML/data
@@ -24,8 +25,16 @@ MODEL_CONFIG = {
 # 0. INITIERING AV DATABASER
 # ==========================================
 
+# KORRIGERAD: Ändrad till /app/db_data/ för att lagras i den persistenta Docker-volymen
+DB_DIR = "/app/db_data"
+DB_PATH = os.path.join(DB_DIR, "agent_archive.db")
+
 def init_sqlite():
-    conn = sqlite3.connect("agent_archive.db")
+    # Säkerställ att mappen för volymen existerar i containern
+    if not os.path.exists(DB_DIR):
+        os.makedirs(DB_DIR, exist_ok=True)
+        
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS solutions (
@@ -89,17 +98,13 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
         print(f"⚠️ Fel vid anrop till Ollama ({model_name}) på {ollama_url}: {e}")
         return f"Kunde inte generera svar på grund av fel: {str(e)}"
 
-# --- AGENT 1: Sökagenten (Nu med beslutsfattande!) ---
+# --- AGENT 1: Sökagenten ---
 def agent_searcher(prompt: str) -> Optional[str]:
-    """
-    Använder LLM för att analysera om problemet kräver extern information (sökning).
-    Returnerar sökresultat om sökning gjordes, annars None.
-    """
     print(f"🕵️‍♂️ [Agent 1: Sök] Analyserar om nätverkssökning krävs med {MODEL_CONFIG['searcher']}...")
     
     decision_prompt = (
         "Du är en intelligent triage-agent för en kod-pipeline.\n"
-        "Din uppgift är att analysera om vi faktiskt behöver söka på internet efter aktuell dokumentation, "
+        "Din uppgift är att analyserar om vi faktiskt behöver söka på internet efter aktuell dokumentation, "
         "externa bibliotek, API-syntaxer eller specifik information för att kunna lösa problemet.\n\n"
         "Instruktioner:\n"
         "- Om problemet kräver sökning (t.ex. externa bibliotek, nya ramverk, APIer): Svara ENBART med en optimerad, kort söksträng för DuckDuckGo.\n"
@@ -107,10 +112,8 @@ def agent_searcher(prompt: str) -> Optional[str]:
         "Svara aldrig med citattecken eller extra förklaringar."
     )
     
-    # Låt modellen ta beslutet
     decision = call_hermes_llm(decision_prompt, prompt, model_name=MODEL_CONFIG["searcher"]).strip().strip('"').strip("'")
     
-    # Tolka beslutet
     if decision.upper() == "NEJ" or decision.upper().startswith("NEJ"):
         print("💡 [Agent 1: Sök] Agenten bedömde att ingen sökning krävs. Använder intern kunskap direkt.")
         return None
@@ -171,7 +174,7 @@ def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[
 # --- AGENT 5: Arkiveringsagenten ---
 def agent_archiver(original_prompt: str, final_solution: str) -> int:
     print("🗄️ [Agent 5: Arkiv] Sparar slutresultat i databasen...")
-    conn = sqlite3.connect("agent_archive.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO solutions (prompt, solution) VALUES (?, ?)", (original_prompt, final_solution))
     inserted_id = cursor.lastrowid
@@ -190,14 +193,11 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
     current_prompt = user_problem
     
     try:
-        # Agent 1 fattar beslut och gör eventuell sökning
         raw_info = agent_searcher(current_prompt)
         
         if raw_info:
-            # Endast om sökning gjordes körs Processorn och sparar i ChromaDB
             agent_processor(raw_info, prompt_id)
         else:
-            # Om ingen sökning behövdes sparar vi en standardkontext för att inte störa experten
             try:
                 collection.delete(ids=[f"doc_{prompt_id}"])
             except:
@@ -211,7 +211,6 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             solution = agent_expert(user_problem, prompt_id)
             approved, feedback = agent_critic(user_problem, solution, loop_count)
             
-            # Failsafe: Max 10 loopar
             if approved or loop_count >= 10:
                 if loop_count >= 10 and not approved:
                     print("⚠️ Max antal loopar (10) nådda utan godkännande. Arkiverar bästa försök.")
@@ -227,10 +226,7 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
                         pass
                 break
             else:
-                # Återmatning av kritikerns feedback till nästa försök
                 current_prompt = f"{user_problem} (Feedback från granskare: {feedback})"
-                
-                # Här söker vi igen fast specifikt baserat på felmeddelandet/feedbacken om det behövs
                 raw_info = agent_searcher(current_prompt)
                 if raw_info:
                     agent_processor(raw_info, prompt_id)
@@ -252,7 +248,7 @@ async def ask_question(request: QuestionRequest, background_tasks: BackgroundTas
 
 @app.get("/api/solutions/{solution_id}")
 async def get_solution(solution_id: int):
-    conn = sqlite3.connect("agent_archive.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT id, prompt, solution, timestamp FROM solutions WHERE id = ?", (solution_id,))
     row = cursor.fetchone()
@@ -265,7 +261,7 @@ async def get_solution(solution_id: int):
 
 @app.get("/api/solutions")
 async def get_all_solutions():
-    conn = sqlite3.connect("agent_archive.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT id, prompt, timestamp FROM solutions ORDER BY timestamp DESC")
     rows = cursor.fetchall()
