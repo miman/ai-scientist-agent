@@ -145,13 +145,17 @@ def agent_expert(original_prompt: str, prompt_id: str):
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Granskar koden (Försök {loop_count})...", flush=True)
     system_prompt = (
-        "Du är en cynisk kodgranskare. Du MÅSTE inleda ditt svar på första raden med exakt:\n"
-        "STATUS: GODKÄND - Om koden är perfekt.\n"
-        "STATUS: UNDERKÄND - Om det finns minsta fel.\n"
-        "Ge sedan din tekniska feedback."
+        "Du är en kodgranskare. Din uppgift är att kontrollera om koden uppfyller kravet.\n"
+        "Om koden är korrekt och löser uppgiften, skriv ordet 'GODKÄND' någonstans i ditt svar.\n"
+        "Om koden har fel eller kan förbättras, skriv 'UNDERKÄND' och förklara vad som ska ändras."
     )
     review_result = call_hermes_llm(system_prompt, f"KRAV:\n{original_prompt}\n\nKOD:\n{solution}", model_name=MODEL_CONFIG["critic"])
-    if "STATUS: GODKÄND" in review_result:
+    
+    # KORRIGERAD: Skriv ut hela kritiken direkt i loggen så du ser exakt vad den säger!
+    print(f"\n💬 [Critic Feedback Försök {loop_count}]:\n{review_result}\n" + "-"*40, flush=True)
+    
+    # KORRIGERAD: Gör sökningen mer flexibel (strunta i exakt radbrytning eller skiftläge)
+    if "GODKÄND" in review_result.upper() and "UNDERKÄND" not in review_result.upper():
         return True, review_result
     return False, review_result
 
