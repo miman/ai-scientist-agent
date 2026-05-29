@@ -7,6 +7,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
 from duckduckgo_search import DDGS
+from bs4 import BeautifulSoup
 
 app = FastAPI(title="Hermes AI Adaptive Multi-Agent Problem Solver API")
 
@@ -59,32 +60,55 @@ class QuestionRequest(BaseModel):
 def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
     try:
-        # Use an explicit dictionary header initialization to prevent DDG from blocking the container IP
         with DDGS() as ddgs:
-            raw_results = []
-            # Fetch text results explicitly. We iterate directly over the generator object.
-            count = 0
-            for r in ddgs.text(query, max_results=3):
-                title = r.get('title', '')
-                body = r.get('body', '') or r.get('snippet', '')
+            # Step 1: Fetch search engine index positions (URLs)
+            search_results = list(ddgs.text(query, max_results=3))
+            
+            if not search_results:
+                return "Factual context check: Live query index yielded zero relevant destination pointers."
                 
-                if title or body:
-                    # PROGRAMMATIC TRIMMING: Instantly clean tabs, double spacing, and noise via CPU logic
-                    cleaned_body = " ".join(body.split())
-                    raw_results.append(f"Title: {title}\nFact-Snippet: {cleaned_body}\n")
-                    count += 1
-                if count >= 3:
-                    break
+            web_pages_extracted = []
+            
+            # Step 2: Loop through target URLs and perform a deep content scrape
+            for i, r in enumerate(search_results):
+                url = r.get('href')
+                title = r.get('title', 'Untitled Destination')
+                
+                if not url:
+                    continue
                     
-            if not raw_results:
-                # Fallback: If DDG blocks or returns empty iterator, return a programmatic diagnostic line
-                print("⚠️ DDGS query returned an empty result dataset. Trying a wider search context...", flush=True)
-                return "Factual context check: Searching for real-time market data returned no active text snippets. Target valuation analysis using standard fundamental metrics."
+                print(f"🌐 [Scraper] Scraping deep page content from link #{i+1}: {url}", flush=True)
                 
-            return "\n\n".join(raw_results)
+                try:
+                    # Inject generic browser agent configurations to bypass simple scrapers blocks
+                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+                    page_response = requests.get(url, headers=headers, timeout=10)
+                    
+                    if page_response.status_code == 200:
+                        soup = BeautifulSoup(page_response.text, "html.parser")
+                        
+                        # Programmatic Extraction: Instantly remove code elements, formatting nodes, and UI boilerplate
+                        for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                            element.extract()
+                            
+                        page_text = soup.get_text()
+                        
+                        # PROGRAMMATIC TRIMMING: Collapse whitespaces and restrict window depth to the first 800 tokens
+                        clean_text = " ".join(page_text.split())
+                        trimmed_content = " ".join(clean_text.split()[:800]) 
+                        
+                        web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
+                except Exception as scrape_error:
+                    # Adaptive Fallback: Revert immediately to engine summary snippet if link blocks client request
+                    print(f"⚠️ Direct page pull blocked for {url} ({scrape_error}). Resorting to default engine abstract.", flush=True)
+                    fallback_snippet = " ".join(r.get('body', '').split())
+                    web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {fallback_snippet}\n")
+
+            return "\n\n---\n\n".join(web_pages_extracted)
+            
     except Exception as e:
         print(f"⚠️ Exception intercepted inside tool_web_search: {str(e)}", flush=True)
-        return f"Web search failed to execute due to driver or network issue: {str(e)}"
+        return f"Web search tool execution failure: {str(e)}"
 
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
@@ -112,7 +136,6 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
 def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
     print(f"🕵️‍♂️ [Agent 1: Searcher] Assessing if web search or supplementary data is needed...", flush=True)
     
-    # REFACTORED: Completely generic lookup triage prompt
     system_prompt = (
         "You are an information retrieval triage specialist.\n"
         "Determine if we must query the live web to fetch real-time facts, specific data points, documentation, or answers to fulfill the request.\n"
@@ -149,7 +172,6 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
 
 def agent_processor(raw_data: str) -> str:
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
-    # REFACTORED: Stripped financial language out to make it completely generic
     return call_hermes_llm(
         "You are an advanced data extraction assistant. Read the provided raw text data segments.\n"
         "Isolate and pull out ALL vital metrics, values, core statistics, dates, constraints, and direct factual answers matching the request requirements.\n"
@@ -160,7 +182,6 @@ def agent_processor(raw_data: str) -> str:
 
 def agent_planner(original_prompt: str, accumulated_context: str) -> str:
     print(f"📋 [Agent 2.5: Planner] Engineering strategic blueprint layout...", flush=True)
-    # REFACTORED: Scale-adaptive generic architectural planning prompt
     system_prompt = (
         "You are a sharp Project Planner and System Architect.\n"
         "Review the user query and the accumulated data points context log.\n"
@@ -266,7 +287,7 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             # Package our current knowledge arrays into a cohesive string context block
             accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
             
-            # REFACTORED: The Planner is now forced to run every single iteration for total structural coherence
+            # CORRECTED: The Planner is now forced to run every single iteration for total structural coherence
             blueprint = agent_planner(user_problem, accumulated_context)
                 
             if history_context:
