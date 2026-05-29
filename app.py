@@ -60,12 +60,13 @@ def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
     try:
         with DDGS() as ddgs:
+            # CORRECTED: Limit to max 3 results to prevent blowing up local VRAM and context windows
             results = list(ddgs.text(query, max_results=3))
             raw_results = []
             for r in results:
                 title = r.get('title', '')
                 body = r.get('body', '')
-                # Clean spacing and newlines instantly using pure CPU python logic
+                # PROGRAMMATIC TRIMMING: Instantly clean tabs, double spacing, and noise via CPU logic
                 cleaned_body = " ".join(body.split())
                 raw_results.append(f"Title: {title}\nFact-Snippet: {cleaned_body}\n")
             return "\n\n".join(raw_results)
@@ -74,6 +75,8 @@ def tool_web_search(query: str) -> str:
 
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
+    
+    # CORRECTED: Switched to /api/chat and structured messages for total Qwen model compatibility
     payload = {
         "model": model_name,
         "messages": [
@@ -81,13 +84,14 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
             {"role": "user", "content": user_content}
         ],
         "stream": False,
-        "options": {"temperature": 0.0},
+        "options": {"temperature": 0.0}, # Forced 0.0 temperature to stop repetitive token loops
         "keep_alive": "30m"
     }
     try:
         endpoint = f"{ollama_url.rstrip('/')}/api/chat"
         response = requests.post(endpoint, json=payload, timeout=300)
         response.raise_for_status()
+        # EXTRACTED: Grabbing raw output text cleanly from chat schema structure
         return response.json()["message"]["content"]
     except Exception as e:
         print(f"⚠️ Error calling Ollama ({model_name}): {e}", flush=True)
@@ -96,7 +100,7 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
 def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
     print(f"🕵️‍♂️ [Agent 1: Searcher] Assessing if web search or supplementary data is needed...", flush=True)
     
-    system_prompt = (
+    decision_prompt = (
         "You are an information retrieval triage specialist.\n"
         "Your goal is to decide if we must query the live web to fetch real-time facts, documentation, metrics, or answers to fulfill the request.\n"
         "CRITICAL context may be attached regarding previous rejections. Only search if the required information is NOT already present in the history context.\n\n"
@@ -109,7 +113,7 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
     if history_context:
         user_content += f"\n\nPAST EXECUTION HISTORY & EXPERT REJECTIONS:\n{history_context}"
         
-    raw_decision = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["searcher"]).strip()
+    raw_decision = call_hermes_llm(decision_prompt, user_content, model_name=MODEL_CONFIG["searcher"]).strip()
     
     if "DECISION: NO" in raw_decision:
         print("💡 [Agent 1: Searcher] Decision: No new web search required at this stage.", flush=True)
@@ -131,6 +135,7 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
 
 def agent_processor(raw_data: str) -> str:
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
+    # CORRECTED: Drastically tightened compression limits to save downline GPU context processing time
     return call_hermes_llm(
         "You are an advanced data extraction assistant. Read the provided raw text data segments.\n"
         "Isolate and pull out ONLY hard metrics, values, key statistics, dates, and direct factual answers.\n"
@@ -148,10 +153,24 @@ def agent_planner(original_prompt: str, accumulated_context: str) -> str:
         "Do not write the final answer text or code yourself. Output ONLY the list of blueprint guidelines for the expert."
     )
     user_content = f"COMPLETE ACCUMULATED KNOWLEDGE:\n{accumulated_context}\n\nORIGINAL REQUEST TARGETS:\n{original_prompt}"
-    return call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
+    blueprint_output = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
+    
+    # VISUAL LOGGING: Prints the structural blueprint out to terminal logs
+    print(f"\n[=== PLANNER SOLUTION BLUEPRINT ===]", flush=True)
+    print(blueprint_output, flush=True)
+    print(f"[===================================]\n", flush=True)
+    
+    return blueprint_output
 
 def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str) -> str:
     print(f"🧠 [Agent 3: Expert] Assembling comprehensive solution matrix...", flush=True)
+    
+    # VISUAL LOGGING: Explicitly dumps what search facts are being delivered into the Expert's scope
+    print(f"\n[=== RESEARCH SEARCH EXTRACT SENT TO EXPERT ===]", flush=True)
+    print(accumulated_context, flush=True)
+    print(f"[==============================================]\n", flush=True)
+    
+    # CORRECTED: Changed from code-restricted to an all-inclusive expert problem solver persona
     system_prompt = (
         "You are an expert Subject Matter Engineer and Technical Writer.\n"
         "Your task is to craft a flawless, production-ready solution following the provided blueprint instructions.\n"
@@ -163,6 +182,7 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str)
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Auditing structural composition (Attempt {loop_count})...", flush=True)
+    # CORRECTED: Changed prompt structure so Critic checks general logic and numeric completeness alongside code objects
     system_prompt = (
         "You are a strict, cynical, and highly analytical Senior Quality Auditor.\n"
         "Your single task is to perform an intense audit on the proposed solution against the original user requirements.\n\n"
@@ -212,64 +232,66 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
     print(f"🚀 Launching adaptive multi-agent research loop for: '{user_problem[:40]}...'", flush=True)
     loop_count = 1
     
-    # Clean, lightweight, list-based memory tracking
+    # Lightweight, clean, array-based tracking lists (Replaced complex, bug-prone ChromaDB threads)
     research_log: List[str] = []
     pipeline_history: List[str] = []
     
     try:
         while True:
-            # Gather past execution logs to inform the Searcher what is missing
+            # Bind past loop metadata to tell the searcher exactly what facts are still missing
             history_context = "\n\n".join(pipeline_history)
             
-            # Step 1: Searcher decides if we need data (given what we already know/failed at)
+            # Step 1: The Searcher evaluates information gaps based on original prompt + history
             raw_info = agent_searcher(user_problem, history_context=history_context)
             if raw_info:
-                # Step 2: Processor condenses raw web texts
+                # Step 2: The Processor filters and shrinks down raw scraped data segments
                 fresh_facts = agent_processor(raw_info)
                 research_log.append(fresh_facts)
             
-            # Combine all collected knowledge points into one string for the Planner/Expert
+            # Package our current knowledge arrays into a cohesive string context block
             accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
             
-            # Step 2.5: Generate/Amend layout blueprint using everything we currently know
+            # Step 2.5: Generate or evolve the project's strategic roadmap blueprint
             blueprint = agent_planner(user_problem, accumulated_context)
             if history_context:
                 blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
             
-            # Step 3: Expert generates the solution draft
+            # Step 3: The Expert compiles the draft solution matching the context log + layout blueprint
             solution = agent_expert(user_problem, blueprint, accumulated_context)
             
-            # Step 4: Critic audits the quality
+            # Step 4: The Critic meticulously audits the outcome
             approved, feedback = agent_critic(user_problem, solution, loop_count)
             
-            if approved or loop_count >= 5: # Kept to 5 max iterations to avoid excessive local timeouts
+            # Cap the system at 5 loop iterations to safeguard hardware from continuous cycles
+            if approved or loop_count >= 5:
                 if loop_count >= 5 and not approved:
                     print("⚠️ Maximum correction cycles hit. Archiving best available variant draft.", flush=True)
                 
-                # Step 4.5: Purge chat pleasantries
+                # Step 4.5: Clean away all conversational assistant filler text
                 polished_solution = agent_sanitizer(solution)
                 
-                # Step 5: Save to SQLite
+                # Step 5: Write final result into production SQLite database
                 db_id = agent_archiver(user_problem, polished_solution)
-                print(f"🎉 Pipeline successfully concluded! Persistent Row Target Registry: {db_id}", flush=True)
+                print(f"🎉 Pipeline successfully concluded! Saved under SQLite row key entry: {db_id}", flush=True)
                 
                 if webhook_url:
                     try: requests.post(webhook_url, json={"status": "completed", "id": db_id}, timeout=10)
                     except: pass
                 break
             else:
-                # Log the rejection data so the Searcher knows exactly what parameters to look up next
+                # Log audit feedback parameters so the next search pass knows exactly what missing details to target
                 pipeline_history.append(f"Attempt {loop_count} Rejected.\nCritic Reasonings:\n{feedback}")
                 loop_count += 1
                 
     except Exception as e:
-        print(f"❌ Critical pipeline structural failure within operational OS thread context: {e}", flush=True)
+        print(f"❌ Critical pipeline failure within background process thread: {e}", flush=True)
 
 # ==========================================
 # 4. REST API ENDPOINTS
 # ==========================================
 @app.post("/api/ask")
 def ask_question(request: QuestionRequest):
+    # Offload execution cycle onto an isolated OS thread to shield FastAPI's async event scheduler
     thread = threading.Thread(
         target=run_agent_pipeline_background, 
         args=(request.prompt, request.webhook_url)
