@@ -52,12 +52,10 @@ class FakeEmbeddingFunction(EmbeddingFunction):
         pass
 
     def __call__(self, input: Documents) -> Embeddings:
+        # Returnerar en fejkad 1-dimensionell vektor per dokument
         if isinstance(input, str):
             return [[0.0]]
         return [[0.0] for _ in input]
-    
-    def name(self) -> str:
-        return "FakeEmbeddingFunction"
         
     def get_config(self) -> dict:
         return {"model": "fake"}
