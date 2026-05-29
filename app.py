@@ -83,7 +83,7 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
     try:
         # KORRIGERAD: Ändrat endpoint till /api/chat
         endpoint = f"{ollama_url.rstrip('/')}/api/chat"
-        response = requests.post(endpoint, json=payload, timeout=120)
+        response = requests.post(endpoint, json=payload, timeout=300)
         response.raise_for_status()
         
         # KORRIGERAD: Hämtar svaret från det strukturerade chat-objektet
@@ -135,13 +135,11 @@ def agent_processor(raw_data: str, prompt_id: str):
     )
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
-    # ÄNDRAD: Ingen embedding_function här!
     coll = client.get_or_create_collection(name="search_knowledge")
     try:
         coll.delete(ids=[f"doc_{prompt_id}"])
     except: pass
     
-    # ÄNDRAD: Vi skickar med en färdig fejk-vektor (en lista med en nolla) direkt här
     coll.add(documents=[cleaned_data], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
     return cleaned_data
 
@@ -149,7 +147,6 @@ def agent_expert(original_prompt: str, prompt_id: str):
     print(f"🧠 [Agent 3: Expert] Skapar lösning...", flush=True)
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
-    # ÄNDRAD: Ingen embedding_function här heller!
     coll = client.get_or_create_collection(name="search_knowledge")
     try:
         chroma_result = coll.get(ids=[f"doc_{prompt_id}"])
@@ -157,7 +154,6 @@ def agent_expert(original_prompt: str, prompt_id: str):
     except:
         context = ""
         
-    # KORRIGERAD: Ändrad från "Code Scientist" till en bredare, extremt kapabel expert-persona
     return call_hermes_llm(
         "You are an expert Subject Matter Assistant and Problem Solver. Provide a complete, optimal, accurate, and comprehensive solution or analysis that fully addresses the user requirements. If code is requested, provide professional-grade code; if analysis or text is requested, provide a deep and structured response.",
         f"Fetched Context/Documentation:\n{context}\n\nUser Requirements:\n{original_prompt}",
@@ -165,25 +161,26 @@ def agent_expert(original_prompt: str, prompt_id: str):
     )
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
-    print(f"⚖️ [Agent 4: Critic] Granskar koden (Försök {loop_count})...", flush=True)
+    print(f"⚖️ [Agent 4: Critic] Granskar lösningen (Försök {loop_count})...", flush=True)
     
     system_prompt = (
-        "You are a strict and analytical Senior Evaluator and Reviewer."
-        "Your task is to thoroughly audit the proposed solution against the original requirements to ensure total accuracy, logic, and completeness."
+        "You are a strict, cynical, and highly analytical Senior Quality Evaluator.\n"
+        "Your task is to thoroughly audit the proposed solution against the original user requirements.\n\n"
+        "CRITICAL INSTRUCTION:\n"
+        "- If the user asked for CODE, ensure the code is bug-free and optimal.\n"
+        "- If the user asked for an ANALYSIS, REPORT, or TEXT, ensure the facts are logical, comprehensive, and fully answer the question.\n\n"
         "You MUST include exactly one of the following verdict tokens somewhere in your response:\n"
-        "VERDICT: APPROVED (Only if the code is 100% flawless and matches all requirements)\n"
-        "VERDICT: REJECTED (If there is even a minor bug, missing requirement, or room for structural improvement)\n\n"
-        "Provide a clear, technical, step-by-step feedback explanation for the developer."
+        "VERDICT: APPROVED (Only if the solution perfectly and completely satisfies all requirements)\n"
+        "VERDICT: REJECTED (If there are missing facts, logical flaws, errors, or room for structural improvement)\n\n"
+        "Provide a clear, step-by-step technical feedback explanation for why the solution is approved or rejected."
     )
     
-    review_result = call_hermes_llm(system_prompt, f"ORIGINAL REQUIREMENTS:\n{original_prompt}\n\nPROPOSED CODE:\n{solution}", model_name=MODEL_CONFIG["critic"])
+    review_result = call_hermes_llm(system_prompt, f"ORIGINAL REQUIREMENTS:\n{original_prompt}\n\nPROPOSED SOLUTION:\n{solution}", model_name=MODEL_CONFIG["critic"])
     
-    # TVINGA UT UTSKRIFTEN: Gör en rå print direkt så vi garanterat ser texten i Podman
     print(f"\n================ CRITIC FEEDBACK (Loop {loop_count}) ================", flush=True)
     print(review_result, flush=True)
     print("===============================================================\n", flush=True)
     
-    # MATCHNING: Kolla efter de ENGELSKA orden APPROVED / REJECTED
     if "APPROVED" in review_result.upper() and "REJECTED" not in review_result.upper():
         return True, review_result
     return False, review_result
