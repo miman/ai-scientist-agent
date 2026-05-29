@@ -59,17 +59,15 @@ class QuestionRequest(BaseModel):
 # ==========================================
 def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
+    web_pages_extracted = []
+    
     try:
         with DDGS() as ddgs:
-            # Use DuckDuckGo news/text layout generator
-            search_results = list(ddgs.text(query, max_results=3))
+            print(f"📡 [Tool: Search] Executing live query on DuckDuckGo...", flush=True)
+            # FIXED: Iterate over the generator directly instead of forcing an instant list conversion
+            results_generator = ddgs.text(query, max_results=3)
             
-            if not search_results:
-                return "Factual context check: Live query index yielded zero relevant destination pointers."
-                
-            web_pages_extracted = []
-            
-            for i, r in enumerate(search_results):
+            for i, r in enumerate(results_generator):
                 url = r.get('href')
                 title = r.get('title', 'Untitled Destination')
                 snippet_backup = r.get('body', '') or r.get('snippet', '')
@@ -77,13 +75,12 @@ def tool_web_search(query: str) -> str:
                 if not url:
                     continue
                     
-                print(f"🌐 [Scraper] Scraping deep page content from link #{i+1}: {url}", flush=True)
+                print(f"🌐 [Scraper] Attempting deep scrape from link #{i+1}: {url}", flush=True)
                 
                 try:
                     headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.5"
                     }
                     page_response = requests.get(url, headers=headers, timeout=8)
                     
@@ -98,24 +95,29 @@ def tool_web_search(query: str) -> str:
                         trimmed_content = " ".join(clean_text.split()[:800])
                         
                         if len(trimmed_content.strip()) > 150:
+                            print(f"✅ [Scraper] Successfully extracted text body from link #{i+1}", flush=True)
                             web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
                             continue
                             
-                    # Fallback if status code is not 200 or returned body text layout content is too sparse
-                    print(f"⚠️ Low text density or code {page_response.status_code} for {url}. Using fallback search snippet.", flush=True)
+                    # Fallback if page blocking occurs or status code is not 200
+                    print(f"⚠️ Link #{i+1} returned code {page_response.status_code}. Using search snippet fallback.", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
                     
                 except Exception as scrape_error:
-                    # Capture snippet parameters immediately if network request encounters errors or timeouts
-                    print(f"⚠️ Direct page pull failed for {url} ({scrape_error}). Resorting to default engine abstract.", flush=True)
+                    print(f"⚠️ Could not pull link #{i+1} directly ({scrape_error}). Using snippet fallback.", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
 
+        # Combine results if any data was gathered
+        if web_pages_extracted:
             return "\n\n---\n\n".join(web_pages_extracted)
             
+        print("⚠️ All search avenues returned empty. Generating automated fallback message context.", flush=True)
+        return "Factual context check: Web search interface yielded zero data records. Please answer based on internal knowledge parameters."
+            
     except Exception as e:
-        print(f"⚠️ Exception intercepted inside tool_web_search: {str(e)}", flush=True)
+        print(f"❌ Exception inside tool_web_search: {str(e)}", flush=True)
         return f"Web search tool execution failure: {str(e)}"
 
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
@@ -282,7 +284,6 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             raw_info = agent_searcher(user_problem, history_context=history_context)
             if raw_info:
                 fresh_facts = agent_processor(raw_info)
-                # Safeguard against appending completely blank results
                 if fresh_facts.strip() and "error" not in fresh_facts.lower():
                     research_log.append(fresh_facts)
             
