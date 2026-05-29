@@ -1,6 +1,3 @@
-This file serves as your internal runbook, explaining **how** to manage the system, configure model parameters, map rootless Podman volumes, and check operations.
-
-```markdown
 # 🛠️ Development & Deployment Guide
 
 This document maps out dependencies, systemic pre-requisites, configuration parameters, and execution vectors required to stand up, optimize, and maintain the **Hermes AI Code Scientist** environment.
@@ -143,5 +140,4 @@ Issue a test payload from your terminal to verify end-to-end functionality:
 curl -X POST http://localhost:8500/api/ask \
      -H "Content-Type: application/json" \
      -d '{"prompt": "Skriv en nodejs-funktion som skriver hello world i konsollen."}'
-```
 ```

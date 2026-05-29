@@ -1,4 +1,6 @@
-# 🔬 Hermes AI Code Scientist
+# 🔬 AI Scientist
+
+This is a sequential/reviewing multi-agent pipeline.
 
 An autonomous, multi-agent local engineering pipeline designed to research, implement, and self-correct software development solutions. Powered entirely by local infrastructure using **FastAPI**, **Podman-Compose**, **ChromaDB**, and **Ollama**, this framework transforms raw engineering prompts into verified, production-ready source code.
 

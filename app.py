@@ -8,12 +8,11 @@ from pydantic import BaseModel
 from typing import Optional
 from duckduckgo_search import DDGS
 import chromadb
-from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
 
 app = FastAPI(title="Hermes AI Code Scientist API")
 
 # ==========================================
-# CONFIGURATION: MODELLER FÖR AGENTERNA
+# CONFIGURATION: AGENT MODELS
 # ==========================================
 MODEL_CONFIG = {
     "searcher": "qwen3.5:9b",
@@ -23,7 +22,7 @@ MODEL_CONFIG = {
 }
 
 # ==========================================
-# 0. INITIERING AV DATABASER
+# 0. DATABASE INITIALIZATION
 # ==========================================
 DB_DIR = "/app/db_data"
 DB_PATH = os.path.join(DB_DIR, "agent_archive.db")
@@ -47,28 +46,32 @@ def init_sqlite():
 init_sqlite()
 
 # ==========================================
-# 1. PYDANTIC SCHEMAN
+# 1. PYDANTIC SCHEMAS
 # ==========================================
 class QuestionRequest(BaseModel):
     prompt: str
     webhook_url: Optional[str] = None
 
 # ==========================================
-# 2. AGENTERNAS LOGIK
+# 2. AGENT LOGIC
 # ==========================================
 def tool_web_search(query: str):
     query = query.strip('"').strip("'")
     try:
         with DDGS() as ddgs:
-            results = [r for r in ddgs.text(query, max_results=3)]
-            return "\n\n".join([f"Titel: {r['title']}\nLänk: {r['href']}\nInnehåll: {r['body']}" for r in results])
+            # Fetch up to 3 results to save VRAM and context windows
+            results = list(ddgs.text(query, max_results=3))
+            raw_results = []
+            for r in results:
+                raw_results.append(f"Title: {r.get('title','')}\nSnippet: {r.get('body','')}\n")
+            return "\n\n".join(raw_results)
     except Exception as e:
-        return f"Sökning misslyckades: {str(e)}"
+        return f"Web search failed: {str(e)}"
 
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
     
-    # KORRIGERAD: Vi använder /api/chat och strukturerade roller för maximal Qwen-kompatibilitet
+    # Using /api/chat and structured messages for optimal Qwen model compatibility
     payload = {
         "model": model_name,
         "messages": [
@@ -81,22 +84,20 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
     }
     
     try:
-        # KORRIGERAD: Ändrat endpoint till /api/chat
         endpoint = f"{ollama_url.rstrip('/')}/api/chat"
         response = requests.post(endpoint, json=payload, timeout=300)
         response.raise_for_status()
         
-        # KORRIGERAD: Hämtar svaret från det strukturerade chat-objektet
+        # Extract response content from the chat message structure
         return response.json()["message"]["content"]
         
     except Exception as e:
-        print(f"⚠️ Fel vid anrop till Ollama ({model_name}): {e}", flush=True)
-        return f"Kunde inte generera svar: {str(e)}"
+        print(f"⚠️ Error calling Ollama ({model_name}): {e}", flush=True)
+        return f"Could not generate a response: {str(e)}"
 
 def agent_searcher(prompt: str) -> Optional[str]:
-    print(f"🕵️‍♂️ [Agent 1: Sök] Analyserar om nätverkssökning krävs...", flush=True)
+    print(f"🕵️‍♂️ [Agent 1: Search] Analyzing if a network search is required...", flush=True)
     
-    # Engelskt systemprompt för maximal träffsäkerhet i triagen
     decision_prompt = (
         "You are a triage agent for a code generation pipeline.\n"
         "Analyze if we need to search the internet for updated documentation, external libraries, or specific API syntax to solve the user's request.\n\n"
@@ -108,43 +109,41 @@ def agent_searcher(prompt: str) -> Optional[str]:
     raw_decision = call_hermes_llm(decision_prompt, prompt, model_name=MODEL_CONFIG["searcher"]).strip()
     
     if "DECISION: NO" in raw_decision:
-        print("💡 [Agent 1: Sök] Ingen sökning krävs. Använder intern kunskap.", flush=True)
+        print("💡 [Agent 1: Search] No web search required. Using internal knowledge.", flush=True)
         return None
         
     if "DECISION: YES" in raw_decision and "SEARCH_QUERY:" in raw_decision:
         search_query = raw_decision.split("SEARCH_QUERY:")[-1].strip().strip('"').strip("'")
         if search_query:
-            print(f"🌐 [Agent 1: Sök] Agenten beslutade att söka efter: '{search_query}'", flush=True)
+            print(f"🌐 [Agent 1: Search] Agent decided to search for: '{search_query}'", flush=True)
             return tool_web_search(search_query)
             
-    # Fallback om modellen blandar formaten men ändå vill söka
+    # Fallback if the model alters formatting but clearly intends to search
     fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").strip().strip('"').strip("'")
     if fallback_query and len(fallback_query) > 1 and "DECISION" not in fallback_query:
-        print(f"🌐 [Agent 1: Sök] Fallback-sökning efter: '{fallback_query}'", flush=True)
+        print(f"🌐 [Agent 1: Search] Fallback search execution for: '{fallback_query}'", flush=True)
         return tool_web_search(fallback_query)
         
-    print("⚠️ [Agent 1: Sök] Kunde inte tolka beslut eller söksträngen blev tom. Skippar sökning.", flush=True)
+    print("⚠️ [Agent 1: Search] Could not parse decision or search query string was empty. Skipping web search.", flush=True)
     return None
 
 def agent_processor(raw_data: str, prompt_id: str):
-    print(f"🧹 [Agent 2: Processor] Rensar data...", flush=True)
+    print(f"🧹 [Agent 2: Processor] Cleaning and compressing data...", flush=True)
     cleaned_data = call_hermes_llm(
-        "You are an advanced data processing assistant. Analyze the provided text and extract all relevant facts, key data points, specifications, and contextual details necessary to answer the user request.", 
+        "You are an advanced data compression assistant. Analyze the provided search results and extract ONLY the vital statistics, numbers, and direct answers (such as stock prices or core facts). Summarize everything into less than 2000 words. Do not include fluff.", 
         raw_data, 
         model_name=MODEL_CONFIG["processor"]
     )
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge")
-    try:
-        coll.delete(ids=[f"doc_{prompt_id}"])
+    try: coll.delete(ids=[f"doc_{prompt_id}"])
     except: pass
-    
     coll.add(documents=[cleaned_data], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
     return cleaned_data
 
 def agent_expert(original_prompt: str, prompt_id: str):
-    print(f"🧠 [Agent 3: Expert] Skapar lösning...", flush=True)
+    print(f"🧠 [Agent 3: Expert] Generating solution...", flush=True)
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge")
@@ -161,7 +160,7 @@ def agent_expert(original_prompt: str, prompt_id: str):
     )
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
-    print(f"⚖️ [Agent 4: Critic] Granskar lösningen (Försök {loop_count})...", flush=True)
+    print(f"⚖️ [Agent 4: Critic] Auditing solution (Attempt {loop_count})...", flush=True)
     
     system_prompt = (
         "You are a strict, cynical, and highly analytical Senior Quality Evaluator.\n"
@@ -186,7 +185,7 @@ def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[
     return False, review_result
 
 def agent_archiver(original_prompt: str, final_solution: str) -> int:
-    print("🗄️ [Agent 5: Arkiv] Sparar slutresultat i SQLite...", flush=True)
+    print("🗄️ [Agent 5: Archive] Saving final results to SQLite database...", flush=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO solutions (prompt, solution) VALUES (?, ?)", (original_prompt, final_solution))
@@ -196,14 +195,15 @@ def agent_archiver(original_prompt: str, final_solution: str) -> int:
     return inserted_id
 
 # ==========================================
-# 3. ORKESTRERING (Körs i en ren tråd)
+# 3. ORCHESTRATION (Runs in a dedicated thread)
 # ==========================================
 def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
-    print(f"🚀 Startar agent-pipeline för: '{user_problem[:40]}...'", flush=True)
+    print(f"🚀 Launching agent pipeline for: '{user_problem[:40]}...'", flush=True)
     prompt_id = f"{hash(user_problem)}_{uuid.uuid4().hex[:8]}"
     loop_count = 1
     
     try:
+        # Integrated optimized result extraction logic directly inside the workflow
         raw_info = agent_searcher(user_problem)
         if raw_info:
             agent_processor(raw_info, prompt_id)
@@ -213,7 +213,7 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             try:
                 coll.delete(ids=[f"doc_{prompt_id}"])
             except: pass
-            coll.add(documents=["Använd intern kunskap."], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
+            coll.add(documents=["Use internal knowledge base."], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
         
         while True:
             solution = agent_expert(user_problem, prompt_id)
@@ -221,9 +221,9 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             
             if approved or loop_count >= 10:
                 if loop_count >= 10 and not approved:
-                    print("⚠️ Max antal loopar nådda. Arkiverar bästa försök.", flush=True)
+                    print("⚠️ Maximum processing loops reached. Archiving best attempt.", flush=True)
                 db_id = agent_archiver(user_problem, solution)
-                print(f"🎉 Klart! Sparat i SQLite med ID: {db_id}", flush=True)
+                print(f"🎉 Success! Saved in SQLite archive with database ID: {db_id}", flush=True)
                 
                 if webhook_url:
                     try: requests.post(webhook_url, json={"status": "completed", "id": db_id}, timeout=10)
@@ -232,14 +232,14 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             else:
                 loop_count += 1
     except Exception as e:
-        print(f"❌ Kritiskt fel i pipeline-tråden: {e}", flush=True)
+        print(f"❌ Critical pipeline failure within background process thread: {e}", flush=True)
 
 # ==========================================
 # 4. REST API ENDPOINTS
 # ==========================================
 @app.post("/api/ask")
 def ask_question(request: QuestionRequest):
-    # KORRIGERAD: Starta en helt fristående OS-tråd istället för BackgroundTasks
+    # Starts an isolated, dedicated OS thread to bypass the async event loop and prevent locks
     thread = threading.Thread(
         target=run_agent_pipeline_background, 
         args=(request.prompt, request.webhook_url)
@@ -248,7 +248,7 @@ def ask_question(request: QuestionRequest):
     
     return {
         "status": "processing",
-        "message": "Agent-loopen har startats i en dedikerad bakgrundstråd."
+        "message": "The multi-agent execution loop has successfully started in a dedicated background process thread."
     }
 
 @app.get("/api/solutions/{solution_id}")
@@ -258,7 +258,7 @@ def get_solution(solution_id: int):
     cursor.execute("SELECT id, prompt, solution, timestamp FROM solutions WHERE id = ?", (solution_id,))
     row = cursor.fetchone()
     conn.close()
-    if not row: raise HTTPException(status_code=404, detail="Hittades inte.")
+    if not row: raise HTTPException(status_code=404, detail="Solution record not found.")
     return {"id": row[0], "prompt": row[1], "solution": row[2], "timestamp": row[3]}
 
 if __name__ == "__main__":
