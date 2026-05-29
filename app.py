@@ -64,9 +64,11 @@ def tool_web_search(query: str) -> str:
     try:
         with DDGS() as ddgs:
             print(f"📡 [Tool: Search] Executing live query on DuckDuckGo...", flush=True)
-            # FIXED: Iterate over the generator directly instead of forcing an instant list conversion
-            results_generator = ddgs.text(query, max_results=3)
             
+            # Fetch up to 10 potential candidates to allow downstream link fallback processing
+            results_generator = ddgs.text(query, max_results=10)
+            
+            success_count = 0
             for i, r in enumerate(results_generator):
                 url = r.get('href')
                 title = r.get('title', 'Untitled Destination')
@@ -75,14 +77,15 @@ def tool_web_search(query: str) -> str:
                 if not url:
                     continue
                     
-                print(f"🌐 [Scraper] Attempting deep scrape from link #{i+1}: {url}", flush=True)
+                print(f"🌐 [Scraper] Evaluating index position #{i+1}: {url}", flush=True)
                 
                 try:
                     headers = {
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
                     }
-                    page_response = requests.get(url, headers=headers, timeout=8)
+                    # Keep timeout snappy so bad links don't stall the pipeline execution loop
+                    page_response = requests.get(url, headers=headers, timeout=6)
                     
                     if page_response.status_code == 200:
                         soup = BeautifulSoup(page_response.text, "html.parser")
@@ -94,22 +97,33 @@ def tool_web_search(query: str) -> str:
                         clean_text = " ".join(page_text.split())
                         trimmed_content = " ".join(clean_text.split()[:800])
                         
-                        if len(trimmed_content.strip()) > 150:
-                            print(f"✅ [Scraper] Successfully extracted text body from link #{i+1}", flush=True)
+                        # Verify the destination text density meets basic evaluation criteria
+                        if len(trimmed_content.strip()) > 200:
+                            print(f"✅ [Scraper] High quality extract saved from position #{i+1}!", flush=True)
                             web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
+                            success_count += 1
+                            
+                            # Self-healing termination parameter reached! We successfully gathered 3 valid entries
+                            if success_count >= 3:
+                                break
                             continue
                             
-                    # Fallback if page blocking occurs or status code is not 200
-                    print(f"⚠️ Link #{i+1} returned code {page_response.status_code}. Using search snippet fallback.", flush=True)
+                    # Explicit Fallback Strategy: If page scraping encounters firewall codes or blank structures, 
+                    # use the engine's organic summary snippet text rather than throwing the whole query instance away.
+                    print(f"⚠️ Index link #{i+1} failed quality check (Status {page_response.status_code}). Advancing to next result item...", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
+                    success_count += 1
                     
                 except Exception as scrape_error:
-                    print(f"⚠️ Could not pull link #{i+1} directly ({scrape_error}). Using snippet fallback.", flush=True)
+                    print(f"⚠️ Scrape pass failure on item index #{i+1} ({scrape_error}). Processing downstream elements...", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
+                    success_count += 1
+                    
+                if success_count >= 3:
+                    break
 
-        # Combine results if any data was gathered
         if web_pages_extracted:
             return "\n\n---\n\n".join(web_pages_extracted)
             
