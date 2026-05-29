@@ -149,9 +149,9 @@ def agent_searcher(prompt: str) -> Optional[str]:
 
 def agent_processor(raw_data: str, prompt_id: str):
     print(f"🧹 [Agent 2: Processor] Rensar data...", flush=True)
-    # Rensar data på engelska för bättre struktur
+    # KORRIGERAD: Extraherar nu ALL typ av relevant fakta, inte bara kod
     cleaned_data = call_hermes_llm(
-        "You are a data processing assistant. Extract all code-relevant facts, API specifications, and documentation details from the text.", 
+        "You are an advanced data processing assistant. Analyze the provided text and extract all relevant facts, key data points, specifications, and contextual details necessary to answer the user request.", 
         raw_data, 
         model_name=MODEL_CONFIG["processor"]
     )
@@ -165,7 +165,7 @@ def agent_processor(raw_data: str, prompt_id: str):
     return cleaned_data
 
 def agent_expert(original_prompt: str, prompt_id: str):
-    print(f"🧠 [Agent 3: Expert] Skapar kodlösning...", flush=True)
+    print(f"🧠 [Agent 3: Expert] Skapar lösning...", flush=True)
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
@@ -175,9 +175,10 @@ def agent_expert(original_prompt: str, prompt_id: str):
     except:
         context = ""
         
+    # KORRIGERAD: Ändrad från "Code Scientist" till en bredare, extremt kapabel expert-persona
     return call_hermes_llm(
-        "You are an expert AI Code Scientist. Write a complete, optimal, secure, and production-ready code solution that fulfills all user requirements. Always write clean code with proper error handling.",
-        f"Fetched Documentation/Context:\n{context}\n\nUser Requirements (Might be in Swedish):\n{original_prompt}",
+        "You are an expert Subject Matter Assistant and Problem Solver. Provide a complete, optimal, accurate, and comprehensive solution or analysis that fully addresses the user requirements. If code is requested, provide professional-grade code; if analysis or text is requested, provide a deep and structured response.",
+        f"Fetched Context/Documentation:\n{context}\n\nUser Requirements:\n{original_prompt}",
         model_name=MODEL_CONFIG["expert"]
     )
 
