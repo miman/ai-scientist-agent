@@ -60,7 +60,7 @@ def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
     try:
         with DDGS() as ddgs:
-            # CORRECTED: Limit to max 3 results to prevent blowing up local VRAM and context windows
+            # Limit to max 3 results to prevent blowing up local VRAM and context windows
             results = list(ddgs.text(query, max_results=3))
             raw_results = []
             for r in results:
@@ -91,7 +91,6 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
         endpoint = f"{ollama_url.rstrip('/')}/api/chat"
         response = requests.post(endpoint, json=payload, timeout=300)
         response.raise_for_status()
-        # EXTRACTED: Grabbing raw output text cleanly from chat schema structure
         return response.json()["message"]["content"]
     except Exception as e:
         print(f"⚠️ Error calling Ollama ({model_name}): {e}", flush=True)
@@ -100,10 +99,11 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
 def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
     print(f"🕵️‍♂️ [Agent 1: Searcher] Assessing if web search or supplementary data is needed...", flush=True)
     
+    # REFACTORED: Completely generic lookup triage prompt
     system_prompt = (
         "You are an information retrieval triage specialist.\n"
-        "Determine if we must query the live web to fetch real-time facts, stock numbers, documentation, or answers.\n"
-        "If previous loop data is attached, only search if the required metrics are missing.\n\n"
+        "Determine if we must query the live web to fetch real-time facts, specific data points, documentation, or answers to fulfill the request.\n"
+        "If previous loop execution history is attached, analyze the missing gaps or rejections and generate a search query specifically targeted at finding the data needed to resolve those rejections.\n\n"
         "You MUST respond in EXACTLY one of these formats:\n"
         "DECISION: NO\n"
         "DECISION: YES | SEARCH_QUERY: keywords focusing only on what is missing"
@@ -125,7 +125,7 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
             print(f"🌐 [Agent 1: Searcher] Target query generated: '{search_query}'", flush=True)
             return tool_web_search(search_query)
             
-    # FIXED AND CRITICAL: Added missing explicit 'return' statement to pass scraped results up to orchestrator loop
+    # FIXED: Handled explicit return paths for the fallback keywords parsing routing
     fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").replace("DECISION:", "").strip().strip('"').strip("'")
     if fallback_query and len(fallback_query) > 1:
         print(f"🌐 [Agent 1: Searcher] Executing fallback string parameters: '{fallback_query}'", flush=True)
@@ -136,23 +136,25 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
 
 def agent_processor(raw_data: str) -> str:
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
-    # CORRECTED: Drastically tightened compression limits to save downline GPU context processing time
+    # REFACTORED: Stripped financial language out to make it completely generic
     return call_hermes_llm(
         "You are an advanced data extraction assistant. Read the provided raw text data segments.\n"
-        "Isolate and pull out ONLY hard metrics, values, key statistics, dates, and direct factual answers.\n"
-        "Format the result as a concise bulleted itemized list of facts under 200 words. Completely avoid narrative filler.", 
+        "Isolate and pull out ALL vital metrics, values, core statistics, dates, constraints, and direct factual answers matching the request requirements.\n"
+        "Format the result as a concise bulleted itemized list of facts under 250 words. Completely avoid narrative filler or conversational explanations.", 
         raw_data, 
         model_name=MODEL_CONFIG["processor"]
     )
 
 def agent_planner(original_prompt: str, accumulated_context: str) -> str:
     print(f"📋 [Agent 2.5: Planner] Engineering strategic blueprint layout...", flush=True)
+    # REFACTORED: Scale-adaptive generic architectural planning prompt
     system_prompt = (
-        "You are a sharp Project Planner.\n"
-        "Review the user query and the accumulated data.\n"
-        "Draft a very compact, direct, and straightforward structural blueprint for the response.\n"
-        "Match the scale of the blueprint to the scale of the question. If the question is simple, keep the blueprint under 3 points.\n"
-        "Do not write the final answer yourself. Output only the blueprint guidelines."
+        "You are a sharp Project Planner and System Architect.\n"
+        "Review the user query and the accumulated data points context log.\n"
+        "Draft a direct, clear, and straightforward structural blueprint for the final response.\n"
+        "Specify exactly what structural layout sections, data parameters, logic structures, or evaluation conclusions the expert must provide.\n"
+        "Match the scale and depth of the blueprint to the complexity of the question. Do not bloat simple requests.\n"
+        "Do not write the final answer text or code yourself. Output ONLY the list of step-by-step blueprint guidelines."
     )
     user_content = f"COMPLETE ACCUMULATED KNOWLEDGE:\n{accumulated_context}\n\nORIGINAL REQUEST TARGETS:\n{original_prompt}"
     blueprint_output = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
@@ -172,11 +174,10 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str)
     print(accumulated_context, flush=True)
     print(f"[==============================================]\n", flush=True)
     
-    # CORRECTED: Changed from code-restricted to an all-inclusive expert problem solver persona
     system_prompt = (
         "You are an expert Subject Matter Engineer and Technical Writer.\n"
         "Your task is to craft a flawless, production-ready solution following the provided blueprint instructions.\n"
-        "CRITICAL: You must explicitly ground your answer using the data, numbers, and variables provided inside the ACCUMULATED CONTEXT.\n"
+        "CRITICAL: You must explicitly ground your answer using the data, numbers, logic parameters, and variables provided inside the ACCUMULATED CONTEXT.\n"
         "If code is required, output complete scripts with error handling. If reports are requested, output a deep data-driven analysis."
     )
     user_content = f"ACCUMULATED KNOWLEDGE LOG:\n{accumulated_context}\n\nBLUEPRINT MATRIX:\n{blueprint}\n\nTARGET USER PROMPT:\n{original_prompt}"
@@ -184,13 +185,12 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str)
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Auditing structural composition (Attempt {loop_count})...", flush=True)
-    # CORRECTED: Changed prompt structure so Critic checks general logic and numeric completeness alongside code objects
     system_prompt = (
         "You are a strict, cynical, and highly analytical Senior Quality Auditor.\n"
         "Your single task is to perform an intense audit on the proposed solution against the original user requirements.\n\n"
         "CRITICAL GUIDELINES:\n"
-        "- If a report is requested, check if real-world metrics, numbers, or specific data points are missing, vague, or placeholder text.\n"
-        "- If code is requested, check for logical bugs, syntax breaks, or missing handling mechanisms.\n\n"
+        "- If a report or text analysis is requested, check if real-world metrics, numbers, or specific required data points are missing, vague, or filled with placeholder descriptions.\n"
+        "- If code is requested, check for logical bugs, syntax breaks, optimization failures, or missing handling mechanisms.\n\n"
         "You MUST explicitly write exactly one of these verdict tokens in your audit summary:\n"
         "VERDICT: APPROVED (Only if the text completely satisfies the user perfectly without flaws)\n"
         "VERDICT: REJECTED (If facts are missing, numbers are absent, or improvements are critically needed)\n\n"
@@ -234,12 +234,9 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
     print(f"🚀 Launching adaptive multi-agent research loop for: '{user_problem[:40]}...'", flush=True)
     loop_count = 1
     
-    # Lightweight, clean, array-based tracking lists (Replaced complex, bug-prone ChromaDB droids)
+    # Lightweight, clean, array-based tracking lists (Replaced complex, bug-prone ChromaDB threads)
     research_log: List[str] = []
     pipeline_history: List[str] = []
-    
-    # DYNAMIC TRIAGE ROUTER: Instantly recognize simple, direct data lookups to trim execution weight
-    is_simple_lookup = len(user_problem.split()) < 20 and any(w in user_problem.lower() for w in ["how much", "price", "today", "status", "what is", "stock"])
     
     try:
         while True:
@@ -256,11 +253,8 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             # Package our current knowledge arrays into a cohesive string context block
             accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
             
-            # Step 2.5: Dynamic Route — Bypasses planning overhead if it is a standard quick lookup question
-            if is_simple_lookup:
-                blueprint = "1. Output a direct, concise data statement answering the user prompt precisely using numbers in the context."
-            else:
-                blueprint = agent_planner(user_problem, accumulated_context)
+            # REFACTORED: The Planner is now forced to run every single iteration for total structural coherence
+            blueprint = agent_planner(user_problem, accumulated_context)
                 
             if history_context:
                 blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
