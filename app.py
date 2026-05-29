@@ -62,39 +62,53 @@ def tool_web_search(query: str) -> str:
     web_pages_extracted = []
     
     try:
-        # Spoof comprehensive headers for the underlying connection session to prevent instant dropouts
         print(f"📡 [Tool: Search] Initializing safe connection wrapper for query: '{query}'", flush=True)
         
         with DDGS() as ddgs:
-            # Force conversion to a solid list while catching any silent api errors immediately
+            search_results = []
             try:
+                # Execution Attempt 1: Standard organic text search
                 search_results = list(ddgs.text(query, max_results=10))
-            except Exception as ddg_api_err:
-                print(f"⚠️ DuckDuckGo API interface dropped the connection: {ddg_api_err}. Trying a broader query layout...", flush=True)
-                search_results = list(ddgs.text(query.split()[0], max_results=5))
-
-            print(f"🔍 [Tool: Search] Found {len(search_results)} primary link indexes on DuckDuckGo.", flush=True)
+            except Exception as e:
+                print(f"⚠️ Primary text search blocked or timed out: {e}", flush=True)
             
+            # CRITICAL FALLBACK 1: If organic text search is blocked, immediately pivot to the News index!
             if not search_results:
-                print("⚠️ DuckDuckGo index returned 0 matching results for this keyword array.", flush=True)
+                print("🔄 [Tool: Search] Organic index empty. Pivoting immediately to DuckDuckGo News index...", flush=True)
+                try:
+                    # News index uses different rate-limiting thresholds and works better inside containers
+                    news_results = list(ddgs.news(query, max_results=5))
+                    # Map the news schema to match our expectations
+                    search_results = [{"href": n.get("url"), "title": n.get("title"), "body": n.get("body")} for n in news_results]
+                except Exception as news_err:
+                    print(f"⚠️ News index pivot failed as well: {news_err}", flush=True)
+
+            # CRITICAL FALLBACK 2: If still empty, trim keywords to a bare-minimum macro query
+            if not search_results:
+                print("🔄 [Tool: Search] News index empty. Retrying with ultra-trimmed macro keywords...", flush=True)
+                try:
+                    macro_query = " ".join(query.split()[:2]) # e.g., Just 'Volvo Group'
+                    search_results = list(ddgs.text(macro_query, max_results=5))
+                except Exception as macro_err:
+                    print(f"⚠️ Macro keyword recovery failed: {macro_err}", flush=True)
+
+            print(f"🔍 [Tool: Search] Total available target links after recovery phases: {len(search_results)}", flush=True)
             
             success_count = 0
             for i, r in enumerate(search_results):
                 url = r.get('href')
                 title = r.get('title', 'Untitled Destination')
-                snippet_backup = r.get('body', '') or r.get('snippet', '')
+                snippet_backup = r.get('body') or r.get('snippet') or ''
                 
                 if not url:
                     continue
                     
-                # VISUAL PRINT FIXED: This line will always execute if links exist!
                 print(f"🌐 [Scraper] Processing Index Position #{i+1} Target Link -> {url}", flush=True)
                 
                 try:
                     headers = {
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                        "Accept-Language": "en-US,en;q=0.5"
                     }
                     page_response = requests.get(url, headers=headers, timeout=6)
                     
@@ -113,7 +127,6 @@ def tool_web_search(query: str) -> str:
                             web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
                             success_count += 1
                             if success_count >= 3:
-                                print("🎯 Target quota of 3 highly dense scraped pages satisfied. Breaking search chain.", flush=True)
                                 break
                             continue
                             
@@ -123,7 +136,7 @@ def tool_web_search(query: str) -> str:
                     success_count += 1
                     
                 except Exception as scrape_error:
-                    print(f"⚠️ Connection timeout or request wall hit on Link #{i+1} ({scrape_error}). Falling back to engine text summary.", flush=True)
+                    print(f"⚠️ Connection failure on Link #{i+1} ({scrape_error}). Falling back to engine text summary.", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
                     success_count += 1
@@ -134,6 +147,7 @@ def tool_web_search(query: str) -> str:
         if web_pages_extracted:
             return "\n\n---\n\n".join(web_pages_extracted)
             
+        # HARD ABSOLUTE BACKUP STATEMENT: If internet connection is completely restricted inside container
         print("⚠️ All search parameters and fallbacks resulted in empty datasets.", flush=True)
         return "Factual context check: Searching for real-time market data returned no active text snippets. Target valuation analysis using standard fundamental metrics."
             
