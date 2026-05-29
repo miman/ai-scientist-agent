@@ -61,7 +61,7 @@ def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
     try:
         with DDGS() as ddgs:
-            # Step 1: Fetch search engine index positions (URLs)
+            # Use DuckDuckGo news/text layout generator
             search_results = list(ddgs.text(query, max_results=3))
             
             if not search_results:
@@ -69,10 +69,10 @@ def tool_web_search(query: str) -> str:
                 
             web_pages_extracted = []
             
-            # Step 2: Loop through target URLs and perform a deep content scrape
             for i, r in enumerate(search_results):
                 url = r.get('href')
                 title = r.get('title', 'Untitled Destination')
+                snippet_backup = r.get('body', '') or r.get('snippet', '')
                 
                 if not url:
                     continue
@@ -80,29 +80,37 @@ def tool_web_search(query: str) -> str:
                 print(f"🌐 [Scraper] Scraping deep page content from link #{i+1}: {url}", flush=True)
                 
                 try:
-                    # Inject generic browser agent configurations to bypass simple scrapers blocks
-                    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-                    page_response = requests.get(url, headers=headers, timeout=10)
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5"
+                    }
+                    page_response = requests.get(url, headers=headers, timeout=8)
                     
                     if page_response.status_code == 200:
                         soup = BeautifulSoup(page_response.text, "html.parser")
                         
-                        # Programmatic Extraction: Instantly remove code elements, formatting nodes, and UI boilerplate
-                        for element in soup(["script", "style", "nav", "footer", "header", "aside"]):
+                        for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
                             element.extract()
                             
                         page_text = soup.get_text()
-                        
-                        # PROGRAMMATIC TRIMMING: Collapse whitespaces and restrict window depth to the first 800 tokens
                         clean_text = " ".join(page_text.split())
-                        trimmed_content = " ".join(clean_text.split()[:800]) 
+                        trimmed_content = " ".join(clean_text.split()[:800])
                         
-                        web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
+                        if len(trimmed_content.strip()) > 150:
+                            web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
+                            continue
+                            
+                    # Fallback if status code is not 200 or returned body text layout content is too sparse
+                    print(f"⚠️ Low text density or code {page_response.status_code} for {url}. Using fallback search snippet.", flush=True)
+                    clean_snippet = " ".join(snippet_backup.split())
+                    web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
+                    
                 except Exception as scrape_error:
-                    # Adaptive Fallback: Revert immediately to engine summary snippet if link blocks client request
-                    print(f"⚠️ Direct page pull blocked for {url} ({scrape_error}). Resorting to default engine abstract.", flush=True)
-                    fallback_snippet = " ".join(r.get('body', '').split())
-                    web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {fallback_snippet}\n")
+                    # Capture snippet parameters immediately if network request encounters errors or timeouts
+                    print(f"⚠️ Direct page pull failed for {url} ({scrape_error}). Resorting to default engine abstract.", flush=True)
+                    clean_snippet = " ".join(snippet_backup.split())
+                    web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
 
             return "\n\n---\n\n".join(web_pages_extracted)
             
@@ -113,7 +121,6 @@ def tool_web_search(query: str) -> str:
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
     
-    # CORRECTED: Switched to /api/chat and structured messages for total Qwen model compatibility
     payload = {
         "model": model_name,
         "messages": [
@@ -121,7 +128,7 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
             {"role": "user", "content": user_content}
         ],
         "stream": False,
-        "options": {"temperature": 0.0}, # Forced 0.0 temperature to stop repetitive token loops
+        "options": {"temperature": 0.0}, 
         "keep_alive": "30m"
     }
     try:
@@ -161,7 +168,6 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
             print(f"🌐 [Agent 1: Searcher] Target query generated: '{search_query}'", flush=True)
             return tool_web_search(search_query)
             
-    # FIXED: Handled explicit return paths for the fallback keywords parsing routing
     fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").replace("DECISION:", "").strip().strip('"').strip("'")
     if fallback_query and len(fallback_query) > 1:
         print(f"🌐 [Agent 1: Searcher] Executing fallback string parameters: '{fallback_query}'", flush=True)
@@ -193,7 +199,6 @@ def agent_planner(original_prompt: str, accumulated_context: str) -> str:
     user_content = f"COMPLETE ACCUMULATED KNOWLEDGE:\n{accumulated_context}\n\nORIGINAL REQUEST TARGETS:\n{original_prompt}"
     blueprint_output = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
     
-    # VISUAL LOGGING: Prints the structural blueprint out to terminal logs
     print(f"\n[=== PLANNER SOLUTION BLUEPRINT ===]", flush=True)
     print(blueprint_output, flush=True)
     print(f"[===================================]\n", flush=True)
@@ -203,7 +208,6 @@ def agent_planner(original_prompt: str, accumulated_context: str) -> str:
 def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str) -> str:
     print(f"🧠 [Agent 3: Expert] Assembling comprehensive solution matrix...", flush=True)
     
-    # VISUAL LOGGING: Explicitly dumps what search facts are being delivered into the Expert's scope
     print(f"\n[=== RESEARCH SEARCH EXTRACT SENT TO EXPERT ===]", flush=True)
     print(accumulated_context, flush=True)
     print(f"[==============================================]\n", flush=True)
@@ -268,46 +272,35 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
     print(f"🚀 Launching adaptive multi-agent research loop for: '{user_problem[:40]}...'", flush=True)
     loop_count = 1
     
-    # Lightweight, clean, array-based tracking lists (Replaced complex, bug-prone ChromaDB threads)
     research_log: List[str] = []
     pipeline_history: List[str] = []
     
     try:
         while True:
-            # Bind past loop metadata to tell the searcher exactly what facts are still missing
             history_context = "\n\n".join(pipeline_history)
             
-            # Step 1: The Searcher evaluates information gaps based on original prompt + history
             raw_info = agent_searcher(user_problem, history_context=history_context)
             if raw_info:
-                # Step 2: The Processor filters and shrinks down raw scraped data segments
                 fresh_facts = agent_processor(raw_info)
-                research_log.append(fresh_facts)
+                # Safeguard against appending completely blank results
+                if fresh_facts.strip() and "error" not in fresh_facts.lower():
+                    research_log.append(fresh_facts)
             
-            # Package our current knowledge arrays into a cohesive string context block
             accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
             
-            # CORRECTED: The Planner is now forced to run every single iteration for total structural coherence
             blueprint = agent_planner(user_problem, accumulated_context)
                 
             if history_context:
                 blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
             
-            # Step 3: The Expert compiles the draft solution matching the context log + layout blueprint
             solution = agent_expert(user_problem, blueprint, accumulated_context)
-            
-            # Step 4: The Critic meticulously audits the outcome
             approved, feedback = agent_critic(user_problem, solution, loop_count)
             
-            # Cap the system at 5 loop iterations to safeguard hardware from continuous cycles
             if approved or loop_count >= 5:
                 if loop_count >= 5 and not approved:
                     print("⚠️ Maximum correction cycles hit. Archiving best available variant draft.", flush=True)
                 
-                # Step 4.5: Clean away all conversational assistant filler text
                 polished_solution = agent_sanitizer(solution)
-                
-                # Step 5: Write final result into production SQLite database
                 db_id = agent_archiver(user_problem, polished_solution)
                 print(f"🎉 Pipeline successfully concluded! Saved under SQLite row key entry: {db_id}", flush=True)
                 
@@ -316,7 +309,6 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
                     except: pass
                 break
             else:
-                # Log audit feedback parameters so the next search pass knows exactly what missing details to target
                 pipeline_history.append(f"Attempt {loop_count} Rejected.\nCritic Reasonings:\n{feedback}")
                 loop_count += 1
                 
@@ -328,7 +320,6 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
 # ==========================================
 @app.post("/api/ask")
 def ask_question(request: QuestionRequest):
-    # Offload execution cycle onto an isolated OS thread to shield FastAPI's async event scheduler
     thread = threading.Thread(
         target=run_agent_pipeline_background, 
         args=(request.prompt, request.webhook_url)
