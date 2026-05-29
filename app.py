@@ -49,7 +49,8 @@ init_sqlite()
 # En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
 class FakeEmbeddingFunction(EmbeddingFunction):
     def __init__(self):
-        super().__init__()
+        # Ta bort super().__init__() helt om den klagar, ChromaDB:s basklass behöver den inte
+        pass
 
     def __call__(self, input: Documents) -> Embeddings:
         if isinstance(input, str):
@@ -57,7 +58,6 @@ class FakeEmbeddingFunction(EmbeddingFunction):
         return [[0.0] for _ in input]
     
     def name(self) -> str:
-        # Tystar collection_configuration.py:791 och types.py:944 permanent
         return "FakeEmbeddingFunction"
         
     def get_config(self) -> dict:
