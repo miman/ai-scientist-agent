@@ -46,29 +46,6 @@ def init_sqlite():
 
 init_sqlite()
 
-# En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
-class FakeEmbeddingFunction(EmbeddingFunction):
-    def __init__(self):
-        pass
-
-    def __call__(self, input: Documents) -> Embeddings:
-        if isinstance(input, str):
-            return [[0.0]]
-        return [[0.0] for _ in input]
-    
-    # KORRIGERAD: Använder @property för att ChromaDB ska kunna anropa den 
-    # både som ett attribut och som en funktion utan att krascha!
-    @property
-    def name(self) -> str:
-        return "FakeEmbeddingFunction"
-        
-    def get_config(self) -> dict:
-        return {"model": "fake"}
-
-    @classmethod
-    def build_from_config(cls, config: dict):
-        return cls()
-
 # ==========================================
 # 1. PYDANTIC SCHEMAN
 # ==========================================
@@ -151,7 +128,6 @@ def agent_searcher(prompt: str) -> Optional[str]:
 
 def agent_processor(raw_data: str, prompt_id: str):
     print(f"🧹 [Agent 2: Processor] Rensar data...", flush=True)
-    # KORRIGERAD: Extraherar nu ALL typ av relevant fakta, inte bara kod
     cleaned_data = call_hermes_llm(
         "You are an advanced data processing assistant. Analyze the provided text and extract all relevant facts, key data points, specifications, and contextual details necessary to answer the user request.", 
         raw_data, 
@@ -159,18 +135,22 @@ def agent_processor(raw_data: str, prompt_id: str):
     )
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
-    coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
+    # ÄNDRAD: Ingen embedding_function här!
+    coll = client.get_or_create_collection(name="search_knowledge")
     try:
         coll.delete(ids=[f"doc_{prompt_id}"])
     except: pass
-    coll.add(documents=[cleaned_data], ids=[f"doc_{prompt_id}"])
+    
+    # ÄNDRAD: Vi skickar med en färdig fejk-vektor (en lista med en nolla) direkt här
+    coll.add(documents=[cleaned_data], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
     return cleaned_data
 
 def agent_expert(original_prompt: str, prompt_id: str):
     print(f"🧠 [Agent 3: Expert] Skapar lösning...", flush=True)
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
-    coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
+    # ÄNDRAD: Ingen embedding_function här heller!
+    coll = client.get_or_create_collection(name="search_knowledge")
     try:
         chroma_result = coll.get(ids=[f"doc_{prompt_id}"])
         context = chroma_result['documents'][0] if (chroma_result and chroma_result['documents']) else ""
@@ -232,11 +212,11 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
             agent_processor(raw_info, prompt_id)
         else:
             client = chromadb.HttpClient(host="chromadb", port=8000)
-            coll = client.get_or_create_collection(name="search_knowledge", embedding_function=FakeEmbeddingFunction())
+            coll = client.get_or_create_collection(name="search_knowledge")
             try:
                 coll.delete(ids=[f"doc_{prompt_id}"])
             except: pass
-            coll.add(documents=["Använd intern kunskap."], ids=[f"doc_{prompt_id}"])
+            coll.add(documents=["Använd intern kunskap."], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
         
         while True:
             solution = agent_expert(user_problem, prompt_id)
