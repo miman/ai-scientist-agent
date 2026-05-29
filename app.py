@@ -60,7 +60,7 @@ def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
     try:
         with DDGS() as ddgs:
-            # CORRECTED: Limit to max 3 results to prevent blowing up local VRAM and context windows
+            #Limit to max 3 results to prevent blowing up local VRAM and context windows
             results = list(ddgs.text(query, max_results=3))
             raw_results = []
             for r in results:
@@ -90,7 +90,6 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
         endpoint = f"{ollama_url.rstrip('/')}/api/chat"
         response = requests.post(endpoint, json=payload, timeout=300)
         response.raise_for_status()
-        # EXTRACTED: Grabbing raw output text cleanly from chat schema structure
         return response.json()["message"]["content"]
     except Exception as e:
         print(f"⚠️ Error calling Ollama ({model_name}): {e}", flush=True)
@@ -114,8 +113,7 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
         
     raw_decision = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["searcher"]).strip()
     
-    # Robust parsing: check for YES/NO anywhere in the model output to prevent format breaks
-    if "DECISION: NO" in raw_decision or "NO" == raw_decision.strip().upper():
+    if "DECISION: NO" in raw_decision or raw_decision.strip().upper() == "NO":
         print("💡 [Agent 1: Searcher] Decision: No new web search required.", flush=True)
         return None
         
@@ -131,12 +129,11 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
         print(f"🌐 [Agent 1: Searcher] Executing fallback string parameters: '{fallback_query}'", flush=True)
         return tool_web_search(fallback_query)
         
-    print("⚠️ [Agent 1: Searcher] Search was requested but query parsing failed. Trying a default search directly.", flush=True)
+    print("⚠️ [Agent 1: Searcher] Search parsing format variant caught. Running query fallback directly.", flush=True)
     return tool_web_search(prompt)
 
 def agent_processor(raw_data: str) -> str:
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
-    # CORRECTED: Drastically tightened compression limits to save downline GPU context processing time
     return call_hermes_llm(
         "You are an advanced data extraction assistant. Read the provided raw text data segments.\n"
         "Isolate and pull out ONLY hard metrics, values, key statistics, dates, and direct factual answers.\n"
@@ -166,12 +163,10 @@ def agent_planner(original_prompt: str, accumulated_context: str) -> str:
 def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str) -> str:
     print(f"🧠 [Agent 3: Expert] Assembling comprehensive solution matrix...", flush=True)
     
-    # VISUAL LOGGING: Explicitly dumps what search facts are being delivered into the Expert's scope
     print(f"\n[=== RESEARCH SEARCH EXTRACT SENT TO EXPERT ===]", flush=True)
     print(accumulated_context, flush=True)
     print(f"[==============================================]\n", flush=True)
     
-    # CORRECTED: Changed from code-restricted to an all-inclusive expert problem solver persona
     system_prompt = (
         "You are an expert Subject Matter Engineer and Technical Writer.\n"
         "Your task is to craft a flawless, production-ready solution following the provided blueprint instructions.\n"
@@ -183,7 +178,6 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str)
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Auditing structural composition (Attempt {loop_count})...", flush=True)
-    # CORRECTED: Changed prompt structure so Critic checks general logic and numeric completeness alongside code objects
     system_prompt = (
         "You are a strict, cynical, and highly analytical Senior Quality Auditor.\n"
         "Your single task is to perform an intense audit on the proposed solution against the original user requirements.\n\n"
@@ -233,45 +227,45 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
     print(f"🚀 Launching adaptive multi-agent research loop for: '{user_problem[:40]}...'", flush=True)
     loop_count = 1
     
-    # Lightweight, clean, array-based tracking lists (Replaced complex, bug-prone ChromaDB threads)
     research_log: List[str] = []
     pipeline_history: List[str] = []
     
+    # DYNAMIC TRIAGE: Detect if the incoming prompt is a quick factual lookup to drop planning weight
+    is_simple_lookup = len(user_problem.split()) < 20 and any(w in user_problem.lower() for w in ["how much", "price", "today", "status", "what is"])
+    
     try:
         while True:
-            # Bind past loop metadata to tell the searcher exactly what facts are still missing
             history_context = "\n\n".join(pipeline_history)
             
-            # Step 1: The Searcher evaluates information gaps based on original prompt + history
+            # Step 1: The Searcher evaluates information gaps
             raw_info = agent_searcher(user_problem, history_context=history_context)
             if raw_info:
-                # Step 2: The Processor filters and shrinks down raw scraped data segments
+                # Step 2: Processor filters raw text
                 fresh_facts = agent_processor(raw_info)
                 research_log.append(fresh_facts)
             
-            # Package our current knowledge arrays into a cohesive string context block
             accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
             
-            # Step 2.5: Generate or evolve the project's strategic roadmap blueprint
-            blueprint = agent_planner(user_problem, accumulated_context)
+            # Step 2.5: Dynamic Route — Skip or minimize planning if it is a simple lookup question
+            if is_simple_lookup:
+                blueprint = "1. Output a direct, concise data statement answering the user prompt precisely using numbers in the context."
+            else:
+                blueprint = agent_planner(user_problem, accumulated_context)
+                
             if history_context:
                 blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
             
-            # Step 3: The Expert compiles the draft solution matching the context log + layout blueprint
+            # Step 3: The Expert compiles the solution matching context + blueprint
             solution = agent_expert(user_problem, blueprint, accumulated_context)
             
-            # Step 4: The Critic meticulously audits the outcome
+            # Step 4: The Critic audits the outcome
             approved, feedback = agent_critic(user_problem, solution, loop_count)
             
-            # Cap the system at 5 loop iterations to safeguard hardware from continuous cycles
             if approved or loop_count >= 5:
                 if loop_count >= 5 and not approved:
                     print("⚠️ Maximum correction cycles hit. Archiving best available variant draft.", flush=True)
                 
-                # Step 4.5: Clean away all conversational assistant filler text
                 polished_solution = agent_sanitizer(solution)
-                
-                # Step 5: Write final result into production SQLite database
                 db_id = agent_archiver(user_problem, polished_solution)
                 print(f"🎉 Pipeline successfully concluded! Saved under SQLite row key entry: {db_id}", flush=True)
                 
@@ -280,7 +274,6 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
                     except: pass
                 break
             else:
-                # Log audit feedback parameters so the next search pass knows exactly what missing details to target
                 pipeline_history.append(f"Attempt {loop_count} Rejected.\nCritic Reasonings:\n{feedback}")
                 loop_count += 1
                 
@@ -292,7 +285,6 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
 # ==========================================
 @app.post("/api/ask")
 def ask_question(request: QuestionRequest):
-    # Offload execution cycle onto an isolated OS thread to shield FastAPI's async event scheduler
     thread = threading.Thread(
         target=run_agent_pipeline_background, 
         args=(request.prompt, request.webhook_url)
