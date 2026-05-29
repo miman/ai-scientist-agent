@@ -47,9 +47,8 @@ def init_sqlite():
 init_sqlite()
 
 # En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
-class FakeEmbeddingFunction(EmbeddingFunction):
+class FakeEmbeddingFunction:
     def __init__(self):
-        # Ta bort super().__init__() helt om den klagar, ChromaDB:s basklass behöver den inte
         pass
 
     def __call__(self, input: Documents) -> Embeddings:
@@ -57,8 +56,9 @@ class FakeEmbeddingFunction(EmbeddingFunction):
             return [[0.0]]
         return [[0.0] for _ in input]
     
-    def name(self) -> str:
-        return "FakeEmbeddingFunction"
+    # Genom att sätta name som ett statiskt attribut istället för en def
+    # så slipper ChromaDB skicka med 'self' när den serialiserar klassen till JSON.
+    name = "FakeEmbeddingFunction"
         
     def get_config(self) -> dict:
         return {"model": "fake"}
