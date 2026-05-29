@@ -1,30 +1,50 @@
 #!/bin/bash
 
-# Sätt variabler
+# Centrala inställningar
 API_URL="http://localhost:8500/api/ask"
-TMP_JSON="./test-prompt.json"
+TMP_JSON="/tmp/hermes_payload.json"
 
-# Texten/prompten vi vill skicka (Helt säker mot citattecken-strul i Bash)
-PROMPT_TEXT="Write a complete and robust Node.js function using ES modules (import statements) that leverages the official '@google/genai' SDK to stream responses from the 'gemini-2.5-flash' model. The function must accept a text prompt as an argument, securely handle the API key via environment variables, and implement a resilient retry mechanism with exponential backoff to handle 429 (Rate Limit) or 503 (Service Unavailable) errors gracefully. The streamed chunks must be written directly to the console (process.stdout) in real-time as they arrive."
+# 1. Hantera input (Kolla om användaren skickade med en prompt som argument)
+if [ -n "$1" ]; then
+    # Använd argumentet som skickades med skriptet
+    PROMPT_TEXT="$1"
+else
+    # Interaktiv fallback om inget argument skickades
+    echo "💡 Tips: Du kan också köra: $0 \"Din fråga här\""
+    echo -n "🤖 Vad vill du att Hermes Code Scientist ska lösa? "
+    read -r PROMPT_TEXT
+fi
 
-echo "🔍 Kontrollerar om Hermes API-server är igång på port 8500..."
-if ! curl -s --connect-timeout 2 http://localhost:8500/ > /dev/null; then
-    echo "❌ Fel: API-servern verkar inte svara. Kör './install.sh' först eller kolla 'podman ps'."
+# Avbryt om användaren tryckte enter utan att skriva något
+if [ -z "$PROMPT_TEXT" ]; then
+    echo "❌ Fel: Prompten kan inte vara tom."
     exit 1
 fi
 
-echo "📦 Skapar skottsäker JSON-payload i $TMP_JSON..."
-# Vi använder en Here-Doc för att skriva JSON exakt som den ska vara
-cat << EOF > "$TMP_JSON"
-{
-  "prompt": "$PROMPT_TEXT"
-}
-EOF
+# 2. Kontrollera att API-servern är vaken
+echo "🔍 Kontrollerar om Hermes API-server är igång på port 8500..."
+if ! curl -s --connect-timeout 2 http://localhost:8500/api/solutions/1 > /dev/null 2>&1; then
+    # Vi kollar mot endpoints som vi vet finns, eller bara bas-URL
+    if ! curl -s --connect-timeout 2 http://localhost:8500/ > /dev/null; then
+        echo "❌ Fel: API-servern svarar inte. Kör './install.sh' först."
+        exit 1
+    fi
+fi
+
+# 3. Skapa en säker JSON-payload (Hanterar alla typer av citattecken helt automatiskt)
+# Vi använder Pythons inbyggda json-modul för att koda strängen helt perfekt
+echo "📦 Paketerar prompten till en skottsäker JSON..."
+JSON_BODY=$(python3 -c '
+import json, sys
+print(json.dumps({"prompt": sys.argv[1]}))
+' "$PROMPT_TEXT")
+
+echo "$JSON_BODY" > "$TMP_JSON"
 
 echo "🚀 Skickar förfrågan till Hermes Agent Pipeline..."
 echo "------------------------------------------------"
 
-# Skicka med curl och spara svaret
+# 4. Skicka till FastAPI
 RESPONSE=$(curl -s -X POST "$API_URL" \
      -H "Content-Type: application/json" \
      -d @"$TMP_JSON")
@@ -33,9 +53,9 @@ RESPONSE=$(curl -s -X POST "$API_URL" \
 echo "$RESPONSE"
 echo "------------------------------------------------"
 
-# Ta bort den temporära filen
+# Städa upp den temporära filen
 rm -f "$TMP_JSON"
 
 echo "🎯 Pipeline har startats i bakgrunden!"
-echo "👉 Kör nu detta kommando för att följa agenternas arbete i realtid:"
+echo "👉 Följ agenternas arbete i realtid med:"
 echo "   podman logs -f hermes_api_server"
