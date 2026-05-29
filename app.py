@@ -76,9 +76,7 @@ def tool_web_search(query: str) -> str:
             if not search_results:
                 print("🔄 [Tool: Search] Organic index empty. Pivoting immediately to DuckDuckGo News index...", flush=True)
                 try:
-                    # News index uses different rate-limiting thresholds and works better inside containers
                     news_results = list(ddgs.news(query, max_results=5))
-                    # Map the news schema to match our expectations
                     search_results = [{"href": n.get("url"), "title": n.get("title"), "body": n.get("body")} for n in news_results]
                 except Exception as news_err:
                     print(f"⚠️ News index pivot failed as well: {news_err}", flush=True)
@@ -87,7 +85,7 @@ def tool_web_search(query: str) -> str:
             if not search_results:
                 print("🔄 [Tool: Search] News index empty. Retrying with ultra-trimmed macro keywords...", flush=True)
                 try:
-                    macro_query = " ".join(query.split()[:2]) # e.g., Just 'Volvo Group'
+                    macro_query = " ".join(query.split()[:2])
                     search_results = list(ddgs.text(macro_query, max_results=5))
                 except Exception as macro_err:
                     print(f"⚠️ Macro keyword recovery failed: {macro_err}", flush=True)
@@ -125,21 +123,24 @@ def tool_web_search(query: str) -> str:
                         if len(trimmed_content.strip()) > 200:
                             print(f"✅ [Scraper] Successfully extracted {len(trimmed_content.split())} words of deep context from Link #{i+1}", flush=True)
                             web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
+                            
+                            # CORRECTED: Only increment count and check quota when a FULL extraction succeeds
                             success_count += 1
                             if success_count >= 3:
+                                print("🎯 Target quota of 3 deeply scraped pages satisfied. Breaking list loop.", flush=True)
                                 break
                             continue
                             
-                    print(f"⚠️ Link #{i+1} returned bad status layout ({page_response.status_code}). Utilizing preview snippet context.", flush=True)
+                    # FIXED: Appends snippet backup context but does NOT increment success_count, allowing loop progression
+                    print(f"⚠️ Link #{i+1} returned bad status layout ({page_response.status_code}). Appending snippet backup and rolling to next link.", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
-                    success_count += 1
                     
                 except Exception as scrape_error:
-                    print(f"⚠️ Connection failure on Link #{i+1} ({scrape_error}). Falling back to engine text summary.", flush=True)
+                    # FIXED: Handles scrape exceptions defensively without counting them toward the target quota
+                    print(f"⚠️ Connection failure on Link #{i+1} ({scrape_error}). Appending snippet backup and rolling to next link.", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
-                    success_count += 1
                     
                 if success_count >= 3:
                     break
@@ -147,7 +148,6 @@ def tool_web_search(query: str) -> str:
         if web_pages_extracted:
             return "\n\n---\n\n".join(web_pages_extracted)
             
-        # HARD ABSOLUTE BACKUP STATEMENT: If internet connection is completely restricted inside container
         print("⚠️ All search parameters and fallbacks resulted in empty datasets.", flush=True)
         return "Factual context check: Searching for real-time market data returned no active text snippets. Target valuation analysis using standard fundamental metrics."
             
@@ -253,7 +253,7 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str)
         "You are an expert Subject Matter Engineer and Technical Writer.\n"
         "Your task is to craft a flawless, production-ready solution following the provided blueprint instructions.\n"
         "CRITICAL: You must explicitly ground your answer using the data, numbers, logic parameters, and variables provided inside the ACCUMULATED CONTEXT.\n"
-        "If code is required, output complete scripts with error handling. If reports are requested, output a deep data-driven analysis."
+        "If code is requested, output complete scripts with error handling. If reports are requested, output a deep data-driven analysis."
     )
     user_content = f"ACCUMULATED KNOWLEDGE LOG:\n{accumulated_context}\n\nBLUEPRINT MATRIX:\n{blueprint}\n\nTARGET USER PROMPT:\n{original_prompt}"
     return call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["expert"])
