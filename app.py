@@ -76,7 +76,6 @@ def tool_web_search(query: str) -> str:
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
     
-    # CORRECTED: Switched to /api/chat and structured messages for total Qwen model compatibility
     payload = {
         "model": model_name,
         "messages": [
@@ -100,38 +99,40 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
 def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
     print(f"🕵️‍♂️ [Agent 1: Searcher] Assessing if web search or supplementary data is needed...", flush=True)
     
-    decision_prompt = (
+    system_prompt = (
         "You are an information retrieval triage specialist.\n"
-        "Your goal is to decide if we must query the live web to fetch real-time facts, documentation, metrics, or answers to fulfill the request.\n"
-        "CRITICAL context may be attached regarding previous rejections. Only search if the required information is NOT already present in the history context.\n\n"
-        "You MUST respond in EXACTLY one of the following two formats (no other text or formatting permitted):\n"
+        "Determine if we must query the live web to fetch real-time facts, stock numbers, documentation, or answers.\n"
+        "If previous loop data is attached, only search if the required metrics are missing.\n\n"
+        "You MUST respond in EXACTLY one of these formats:\n"
         "DECISION: NO\n"
-        "DECISION: YES | SEARCH_QUERY: targeted search keywords focusing exclusively on missing data"
+        "DECISION: YES | SEARCH_QUERY: keywords focusing only on what is missing"
     )
     
     user_content = f"TARGET REQUEST:\n{prompt}"
     if history_context:
-        user_content += f"\n\nPAST EXECUTION HISTORY & EXPERT REJECTIONS:\n{history_context}"
+        user_content += f"\n\nPAST EXECUTION HISTORY:\n{history_context}"
         
-    raw_decision = call_hermes_llm(decision_prompt, user_content, model_name=MODEL_CONFIG["searcher"]).strip()
+    raw_decision = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["searcher"]).strip()
     
-    if "DECISION: NO" in raw_decision:
-        print("💡 [Agent 1: Searcher] Decision: No new web search required at this stage.", flush=True)
+    # Robust parsing: check for YES/NO anywhere in the model output to prevent format breaks
+    if "DECISION: NO" in raw_decision or "NO" == raw_decision.strip().upper():
+        print("💡 [Agent 1: Searcher] Decision: No new web search required.", flush=True)
         return None
         
-    if "DECISION: YES" in raw_decision and "SEARCH_QUERY:" in raw_decision:
+    if "SEARCH_QUERY:" in raw_decision:
         search_query = raw_decision.split("SEARCH_QUERY:")[-1].strip().strip('"').strip("'")
         if search_query:
             print(f"🌐 [Agent 1: Searcher] Target query generated: '{search_query}'", flush=True)
             return tool_web_search(search_query)
             
+    # FIXED: Added the missing explicit 'return' statement on the fallback pathway!
     fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").strip().strip('"').strip("'")
     if fallback_query and len(fallback_query) > 1 and "DECISION" not in fallback_query:
         print(f"🌐 [Agent 1: Searcher] Executing fallback string parameters: '{fallback_query}'", flush=True)
         return tool_web_search(fallback_query)
         
-    print("⚠️ [Agent 1: Searcher] Empty or unparsable triage decision. Bypassing live query.", flush=True)
-    return None
+    print("⚠️ [Agent 1: Searcher] Search was requested but query parsing failed. Trying a default search directly.", flush=True)
+    return tool_web_search(prompt)
 
 def agent_processor(raw_data: str) -> str:
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
@@ -147,15 +148,15 @@ def agent_processor(raw_data: str) -> str:
 def agent_planner(original_prompt: str, accumulated_context: str) -> str:
     print(f"📋 [Agent 2.5: Planner] Engineering strategic blueprint layout...", flush=True)
     system_prompt = (
-        "You are an expert Project Planner and System Architect.\n"
-        "Analyze the user's requirements and the complete accumulated context logs gathered so far.\n"
-        "Draft a step-by-step structural blueprint specifying exactly what sections, contents, data requirements, and formatting rules the final output must fulfill.\n"
-        "Do not write the final answer text or code yourself. Output ONLY the list of blueprint guidelines for the expert."
+        "You are a sharp Project Planner.\n"
+        "Review the user query and the accumulated data.\n"
+        "Draft a very compact, direct, and straightforward structural blueprint for the response.\n"
+        "Match the scale of the blueprint to the scale of the question. If the question is simple, keep the blueprint under 3 points.\n"
+        "Do not write the final answer yourself. Output only the blueprint guidelines."
     )
     user_content = f"COMPLETE ACCUMULATED KNOWLEDGE:\n{accumulated_context}\n\nORIGINAL REQUEST TARGETS:\n{original_prompt}"
     blueprint_output = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
     
-    # VISUAL LOGGING: Prints the structural blueprint out to terminal logs
     print(f"\n[=== PLANNER SOLUTION BLUEPRINT ===]", flush=True)
     print(blueprint_output, flush=True)
     print(f"[===================================]\n", flush=True)
