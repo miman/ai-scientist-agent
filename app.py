@@ -49,13 +49,16 @@ init_sqlite()
 # En tom fejk-klass så att klienten ALDRIG laddar ner ONNX lokalt över internet
 class FakeEmbeddingFunction(EmbeddingFunction):
     def __init__(self):
-        pass
+        super().__init__()
 
     def __call__(self, input: Documents) -> Embeddings:
-        # Returnerar en fejkad 1-dimensionell vektor per dokument
         if isinstance(input, str):
             return [[0.0]]
         return [[0.0] for _ in input]
+    
+    def name(self) -> str:
+        # Tystar collection_configuration.py:791 och types.py:944 permanent
+        return "FakeEmbeddingFunction"
         
     def get_config(self) -> dict:
         return {"model": "fake"}
