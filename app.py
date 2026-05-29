@@ -62,14 +62,24 @@ def tool_web_search(query: str) -> str:
     web_pages_extracted = []
     
     try:
+        # Spoof comprehensive headers for the underlying connection session to prevent instant dropouts
+        print(f"📡 [Tool: Search] Initializing safe connection wrapper for query: '{query}'", flush=True)
+        
         with DDGS() as ddgs:
-            print(f"📡 [Tool: Search] Executing live query on DuckDuckGo...", flush=True)
+            # Force conversion to a solid list while catching any silent api errors immediately
+            try:
+                search_results = list(ddgs.text(query, max_results=10))
+            except Exception as ddg_api_err:
+                print(f"⚠️ DuckDuckGo API interface dropped the connection: {ddg_api_err}. Trying a broader query layout...", flush=True)
+                search_results = list(ddgs.text(query.split()[0], max_results=5))
+
+            print(f"🔍 [Tool: Search] Found {len(search_results)} primary link indexes on DuckDuckGo.", flush=True)
             
-            # Fetch up to 10 potential candidates to allow downstream link fallback processing
-            results_generator = ddgs.text(query, max_results=10)
+            if not search_results:
+                print("⚠️ DuckDuckGo index returned 0 matching results for this keyword array.", flush=True)
             
             success_count = 0
-            for i, r in enumerate(results_generator):
+            for i, r in enumerate(search_results):
                 url = r.get('href')
                 title = r.get('title', 'Untitled Destination')
                 snippet_backup = r.get('body', '') or r.get('snippet', '')
@@ -77,14 +87,15 @@ def tool_web_search(query: str) -> str:
                 if not url:
                     continue
                     
-                print(f"🌐 [Scraper] Evaluating index position #{i+1}: {url}", flush=True)
+                # VISUAL PRINT FIXED: This line will always execute if links exist!
+                print(f"🌐 [Scraper] Processing Index Position #{i+1} Target Link -> {url}", flush=True)
                 
                 try:
                     headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.5"
                     }
-                    # Keep timeout snappy so bad links don't stall the pipeline execution loop
                     page_response = requests.get(url, headers=headers, timeout=6)
                     
                     if page_response.status_code == 200:
@@ -97,26 +108,22 @@ def tool_web_search(query: str) -> str:
                         clean_text = " ".join(page_text.split())
                         trimmed_content = " ".join(clean_text.split()[:800])
                         
-                        # Verify the destination text density meets basic evaluation criteria
                         if len(trimmed_content.strip()) > 200:
-                            print(f"✅ [Scraper] High quality extract saved from position #{i+1}!", flush=True)
+                            print(f"✅ [Scraper] Successfully extracted {len(trimmed_content.split())} words of deep context from Link #{i+1}", flush=True)
                             web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
                             success_count += 1
-                            
-                            # Self-healing termination parameter reached! We successfully gathered 3 valid entries
                             if success_count >= 3:
+                                print("🎯 Target quota of 3 highly dense scraped pages satisfied. Breaking search chain.", flush=True)
                                 break
                             continue
                             
-                    # Explicit Fallback Strategy: If page scraping encounters firewall codes or blank structures, 
-                    # use the engine's organic summary snippet text rather than throwing the whole query instance away.
-                    print(f"⚠️ Index link #{i+1} failed quality check (Status {page_response.status_code}). Advancing to next result item...", flush=True)
+                    print(f"⚠️ Link #{i+1} returned bad status layout ({page_response.status_code}). Utilizing preview snippet context.", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
                     success_count += 1
                     
                 except Exception as scrape_error:
-                    print(f"⚠️ Scrape pass failure on item index #{i+1} ({scrape_error}). Processing downstream elements...", flush=True)
+                    print(f"⚠️ Connection timeout or request wall hit on Link #{i+1} ({scrape_error}). Falling back to engine text summary.", flush=True)
                     clean_snippet = " ".join(snippet_backup.split())
                     web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
                     success_count += 1
@@ -127,11 +134,11 @@ def tool_web_search(query: str) -> str:
         if web_pages_extracted:
             return "\n\n---\n\n".join(web_pages_extracted)
             
-        print("⚠️ All search avenues returned empty. Generating automated fallback message context.", flush=True)
-        return "Factual context check: Web search interface yielded zero data records. Please answer based on internal knowledge parameters."
+        print("⚠️ All search parameters and fallbacks resulted in empty datasets.", flush=True)
+        return "Factual context check: Searching for real-time market data returned no active text snippets. Target valuation analysis using standard fundamental metrics."
             
     except Exception as e:
-        print(f"❌ Exception inside tool_web_search: {str(e)}", flush=True)
+        print(f"❌ Critical Exception caught inside tool_web_search module layer: {str(e)}", flush=True)
         return f"Web search tool execution failure: {str(e)}"
 
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
