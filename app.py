@@ -186,8 +186,8 @@ def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[
     print(f"⚖️ [Agent 4: Critic] Granskar koden (Försök {loop_count})...", flush=True)
     
     system_prompt = (
-        "You are a strict and cynical Senior Code Reviewer.\n"
-        "Your task is to thoroughly audit the proposed code solution against the original requirements.\n\n"
+        "You are a strict and analytical Senior Evaluator and Reviewer."
+        "Your task is to thoroughly audit the proposed solution against the original requirements to ensure total accuracy, logic, and completeness."
         "You MUST include exactly one of the following verdict tokens somewhere in your response:\n"
         "VERDICT: APPROVED (Only if the code is 100% flawless and matches all requirements)\n"
         "VERDICT: REJECTED (If there is even a minor bug, missing requirement, or room for structural improvement)\n\n"
