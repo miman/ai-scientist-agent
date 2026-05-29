@@ -9,7 +9,7 @@ from typing import Optional
 from duckduckgo_search import DDGS
 import chromadb
 
-app = FastAPI(title="Hermes AI Code Scientist API")
+app = FastAPI(title="AI Multi-Agent Problem Solver API")
 
 # ==========================================
 # CONFIGURATION: AGENT MODELS
@@ -17,8 +17,10 @@ app = FastAPI(title="Hermes AI Code Scientist API")
 MODEL_CONFIG = {
     "searcher": "qwen3.5:9b",
     "processor": "qwen3.5:9b",
+    "planner": "qwen3.5:9b",
     "expert": "qwen3.5:9b",
-    "critic": "qwen3.5:9b"
+    "critic": "qwen3.5:9b",
+    "sanitizer": "qwen3.5:9b"
 }
 
 # ==========================================
@@ -53,17 +55,23 @@ class QuestionRequest(BaseModel):
     webhook_url: Optional[str] = None
 
 # ==========================================
-# 2. AGENT LOGIC
+# 2. AGENT LOGIC & DET_TOOLS
 # ==========================================
 def tool_web_search(query: str):
     query = query.strip('"').strip("'")
     try:
         with DDGS() as ddgs:
-            # Fetch up to 3 results to save VRAM and context windows
+            # Fetch up to 3 results to save VRAM and keep context slim
             results = list(ddgs.text(query, max_results=3))
             raw_results = []
             for r in results:
-                raw_results.append(f"Title: {r.get('title','')}\nSnippet: {r.get('body','')}\n")
+                title = r.get('title', '')
+                body = r.get('body', '')
+                
+                # PROGRAMMATIC TRIMMING: Instantly normalize rogue tabs, spacing, and clean text
+                cleaned_body = " ".join(body.split())
+                
+                raw_results.append(f"Title: {title}\nFact-Snippet: {cleaned_body}\n")
             return "\n\n".join(raw_results)
     except Exception as e:
         return f"Web search failed: {str(e)}"
@@ -71,7 +79,6 @@ def tool_web_search(query: str):
 def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> str:
     ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
     
-    # Using /api/chat and structured messages for optimal Qwen model compatibility
     payload = {
         "model": model_name,
         "messages": [
@@ -79,7 +86,7 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
             {"role": "user", "content": user_content}
         ],
         "stream": False,
-        "options": {"temperature": 0.2},
+        "options": {"temperature": 0.0},  # Low temperature for deterministic, structured output
         "keep_alive": "30m"
     }
     
@@ -87,20 +94,17 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
         endpoint = f"{ollama_url.rstrip('/')}/api/chat"
         response = requests.post(endpoint, json=payload, timeout=300)
         response.raise_for_status()
-        
-        # Extract response content from the chat message structure
         return response.json()["message"]["content"]
-        
     except Exception as e:
         print(f"⚠️ Error calling Ollama ({model_name}): {e}", flush=True)
-        return f"Could not generate a response: {str(e)}"
+        return f"Could not generate a response due to an internal timeout or connection error: {str(e)}"
 
 def agent_searcher(prompt: str) -> Optional[str]:
-    print(f"🕵️‍♂️ [Agent 1: Search] Analyzing if a network search is required...", flush=True)
+    print(f"🕵️‍♂️ [Agent 1: Searcher] Analyzing if web search is needed...", flush=True)
     
     decision_prompt = (
-        "You are a triage agent for a code generation pipeline.\n"
-        "Analyze if we need to search the internet for updated documentation, external libraries, or specific API syntax to solve the user's request.\n\n"
+        "You are a triage agent for an advanced execution pipeline.\n"
+        "Analyze if we need to search the internet for updated documentation, financial data, real-time metrics, or specific API syntax to solve the user's request.\n\n"
         "You MUST respond in EXACTLY one of the following two formats (no other text or explanation):\n"
         "DECISION: NO\n"
         "DECISION: YES | SEARCH_QUERY: your optimized search keywords here"
@@ -109,28 +113,29 @@ def agent_searcher(prompt: str) -> Optional[str]:
     raw_decision = call_hermes_llm(decision_prompt, prompt, model_name=MODEL_CONFIG["searcher"]).strip()
     
     if "DECISION: NO" in raw_decision:
-        print("💡 [Agent 1: Search] No web search required. Using internal knowledge.", flush=True)
+        print("💡 [Agent 1: Searcher] No web search required. Relying on internal knowledge base.", flush=True)
         return None
         
     if "DECISION: YES" in raw_decision and "SEARCH_QUERY:" in raw_decision:
         search_query = raw_decision.split("SEARCH_QUERY:")[-1].strip().strip('"').strip("'")
         if search_query:
-            print(f"🌐 [Agent 1: Search] Agent decided to search for: '{search_query}'", flush=True)
+            print(f"🌐 [Agent 1: Searcher] Agent decided to search for: '{search_query}'", flush=True)
             return tool_web_search(search_query)
             
-    # Fallback if the model alters formatting but clearly intends to search
     fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").strip().strip('"').strip("'")
     if fallback_query and len(fallback_query) > 1 and "DECISION" not in fallback_query:
-        print(f"🌐 [Agent 1: Search] Fallback search execution for: '{fallback_query}'", flush=True)
+        print(f"🌐 [Agent 1: Searcher] Fallback search execution for: '{fallback_query}'", flush=True)
         return tool_web_search(fallback_query)
         
-    print("⚠️ [Agent 1: Search] Could not parse decision or search query string was empty. Skipping web search.", flush=True)
+    print("⚠️ [Agent 1: Searcher] Could not parse decision or search query string was empty. Skipping search.", flush=True)
     return None
 
 def agent_processor(raw_data: str, prompt_id: str):
-    print(f"🧹 [Agent 2: Processor] Cleaning and compressing data...", flush=True)
+    print(f"🧹 [Agent 2: Processor] Synthesizing extracted facts...", flush=True)
     cleaned_data = call_hermes_llm(
-        "You are an advanced data compression assistant. Analyze the provided search results and extract ONLY the vital statistics, numbers, and direct answers (such as stock prices or core facts). Summarize everything into less than 2000 words. Do not include fluff.", 
+        "You are an advanced data extraction assistant. Analyze the cleanly trimmed web results provided.\n"
+        "Extract ONLY vital metrics, numbers, core statistics, and direct factual answers matching the request.\n"
+        "Format the output as a concise bulleted list of facts under 500 words. Eliminate conversational fluff.", 
         raw_data, 
         model_name=MODEL_CONFIG["processor"]
     )
@@ -142,8 +147,19 @@ def agent_processor(raw_data: str, prompt_id: str):
     coll.add(documents=[cleaned_data], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
     return cleaned_data
 
-def agent_expert(original_prompt: str, prompt_id: str):
-    print(f"🧠 [Agent 3: Expert] Generating solution...", flush=True)
+def agent_planner(original_prompt: str, context: str) -> str:
+    print(f"📋 [Agent 2.5: Planner] Generating structural solution blueprint...", flush=True)
+    system_prompt = (
+        "You are an expert Project Planner and Architect.\n"
+        "Your task is to analyze the user's requirements and the gathered context, then draft a structured, step-by-step blueprint of what the final solution must include.\n"
+        "Do not write the final solution code or report yourself. Instead, list the structural sections, constraints, logic requirements, or components needed.\n"
+        "Output your blueprint as a clean, concise bulleted list for the implementation expert to follow."
+    )
+    user_content = f"CONTEXT DATA:\n{context}\n\nUSER ORIGINAL REQUIREMENTS:\n{original_prompt}"
+    return call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
+
+def agent_expert(original_prompt: str, blueprint: str, prompt_id: str):
+    print(f"🧠 [Agent 3: Expert] Executing solution blueprint...", flush=True)
     
     client = chromadb.HttpClient(host="chromadb", port=8000)
     coll = client.get_or_create_collection(name="search_knowledge")
@@ -153,11 +169,14 @@ def agent_expert(original_prompt: str, prompt_id: str):
     except:
         context = ""
         
-    return call_hermes_llm(
-        "You are an expert Subject Matter Assistant and Problem Solver. Provide a complete, optimal, accurate, and comprehensive solution or analysis that fully addresses the user requirements. If code is requested, provide professional-grade code; if analysis or text is requested, provide a deep and structured response.",
-        f"Fetched Context/Documentation:\n{context}\n\nUser Requirements:\n{original_prompt}",
-        model_name=MODEL_CONFIG["expert"]
+    system_prompt = (
+        "You are an expert Subject Matter Assistant and Implementation Engineer.\n"
+        "Your task is to craft a complete, optimal, accurate, and professional-grade solution following the provided blueprint.\n"
+        "If code is requested, provide full production-ready code with error handling.\n"
+        "If text/analysis is requested, provide a deep, well-structured, data-driven report."
     )
+    user_content = f"RESEARCH CONTEXT:\n{context}\n\nSTRUCTURAL BLUEPRINT TO FOLLOW:\n{blueprint}\n\nUSER TARGET LOGIC:\n{original_prompt}"
+    return call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["expert"])
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Auditing solution (Attempt {loop_count})...", flush=True)
@@ -166,26 +185,37 @@ def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[
         "You are a strict, cynical, and highly analytical Senior Quality Evaluator.\n"
         "Your task is to thoroughly audit the proposed solution against the original user requirements.\n\n"
         "CRITICAL INSTRUCTION:\n"
-        "- If the user asked for CODE, ensure the code is bug-free and optimal.\n"
-        "- If the user asked for an ANALYSIS, REPORT, or TEXT, ensure the facts are logical, comprehensive, and fully answer the question.\n\n"
+        "- If the user asked for CODE, ensure the code is bug-free, handles timeouts/errors, and matches all constraints.\n"
+        "- If the user asked for an ANALYSIS, REPORT, or TEXT, ensure the facts are logical, numeric, complete, and contain no backend server logs.\n\n"
         "You MUST include exactly one of the following verdict tokens somewhere in your response:\n"
         "VERDICT: APPROVED (Only if the solution perfectly and completely satisfies all requirements)\n"
         "VERDICT: REJECTED (If there are missing facts, logical flaws, errors, or room for structural improvement)\n\n"
-        "Provide a clear, step-by-step technical feedback explanation for why the solution is approved or rejected."
+        "Provide clear, step-by-step technical feedback for the expert indicating exactly what needs adjustment."
     )
     
     review_result = call_hermes_llm(system_prompt, f"ORIGINAL REQUIREMENTS:\n{original_prompt}\n\nPROPOSED SOLUTION:\n{solution}", model_name=MODEL_CONFIG["critic"])
     
-    print(f"\n================ CRITIC FEEDBACK (Loop {loop_count}) ================", flush=True)
+    print(f"\n================ CRITIC AUDIT REPORT (Loop {loop_count}) ================", flush=True)
     print(review_result, flush=True)
-    print("===============================================================\n", flush=True)
+    print("====================================================================\n", flush=True)
     
     if "APPROVED" in review_result.upper() and "REJECTED" not in review_result.upper():
         return True, review_result
     return False, review_result
 
+def agent_sanitizer(raw_solution: str) -> str:
+    print("✨ [Agent 4.5: Sanitizer] Polishing solution and stripping chat filler...", flush=True)
+    system_prompt = (
+        "You are a professional Technical Editor and Content Sanitizer.\n"
+        "Your task is to take an approved technical solution and strip away any conversational conversational metadata or developer filler text.\n"
+        "Remove statements like: 'Sure, here is your updated solution', 'I have fixed the issues pointed out', or 'Hope this helps!'.\n"
+        "Retain 100% of the actual core report text, financial analysis, markdown formatting, or source code intact.\n"
+        "Output ONLY the clean, ready-to-use technical artifact."
+    )
+    return call_hermes_llm(system_prompt, raw_solution, model_name=MODEL_CONFIG["sanitizer"])
+
 def agent_archiver(original_prompt: str, final_solution: str) -> int:
-    print("🗄️ [Agent 5: Archive] Saving final results to SQLite database...", flush=True)
+    print("🗄️ [Agent 5: Archive] Saving polished artifact to SQLite database...", flush=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT INTO solutions (prompt, solution) VALUES (?, ?)", (original_prompt, final_solution))
@@ -195,42 +225,54 @@ def agent_archiver(original_prompt: str, final_solution: str) -> int:
     return inserted_id
 
 # ==========================================
-# 3. ORCHESTRATION (Runs in a dedicated thread)
+# 3. ORCHESTRATION (Thread Worker Context)
 # ==========================================
 def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
-    print(f"🚀 Launching agent pipeline for: '{user_problem[:40]}...'", flush=True)
+    print(f"🚀 Launching multi-agent pipeline for: '{user_problem[:40]}...'", flush=True)
     prompt_id = f"{hash(user_problem)}_{uuid.uuid4().hex[:8]}"
     loop_count = 1
     
     try:
-        # Integrated optimized result extraction logic directly inside the workflow
+        # Step 1 & 2: Dynamic Search & Processing
         raw_info = agent_searcher(user_problem)
         if raw_info:
-            agent_processor(raw_info, prompt_id)
+            context_summary = agent_processor(raw_info, prompt_id)
         else:
             client = chromadb.HttpClient(host="chromadb", port=8000)
             coll = client.get_or_create_collection(name="search_knowledge")
-            try:
-                coll.delete(ids=[f"doc_{prompt_id}"])
+            try: coll.delete(ids=[f"doc_{prompt_id}"])
             except: pass
-            coll.add(documents=["Use internal knowledge base."], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
+            context_summary = "Rely exclusively on internal generalized pre-trained knowledge base parameters."
+            coll.add(documents=[context_summary], embeddings=[[0.0]], ids=[f"doc_{prompt_id}"])
         
+        # Step 2.5: Strategic Solution Blueprint Planning
+        blueprint = agent_planner(user_problem, context_summary)
+        
+        # Step 3 & 4: Critic Refinement Loop
         while True:
-            solution = agent_expert(user_problem, prompt_id)
+            solution = agent_expert(user_problem, blueprint, prompt_id)
             approved, feedback = agent_critic(user_problem, solution, loop_count)
             
             if approved or loop_count >= 10:
                 if loop_count >= 10 and not approved:
-                    print("⚠️ Maximum processing loops reached. Archiving best attempt.", flush=True)
-                db_id = agent_archiver(user_problem, solution)
-                print(f"🎉 Success! Saved in SQLite archive with database ID: {db_id}", flush=True)
+                    print("⚠️ Maximum iteration loops hit without absolute approval. Archiving current best variant.", flush=True)
+                
+                # Step 4.5: Clean out chatbot debris before saving
+                polished_solution = agent_sanitizer(solution)
+                
+                # Step 5: Persistent Storage Integration
+                db_id = agent_archiver(user_problem, polished_solution)
+                print(f"🎉 Pipeline successfully concluded! Saved under SQLite Archive Row ID: {db_id}", flush=True)
                 
                 if webhook_url:
                     try: requests.post(webhook_url, json={"status": "completed", "id": db_id}, timeout=10)
                     except: pass
                 break
             else:
+                # Append critic feedback directly to the operational blueprint for the next loop run
+                blueprint = f"{blueprint}\n\nCRITIC REJECTION AMENDMENT (ATTEMPT {loop_count}):\n{feedback}"
                 loop_count += 1
+                
     except Exception as e:
         print(f"❌ Critical pipeline failure within background process thread: {e}", flush=True)
 
@@ -239,7 +281,7 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
 # ==========================================
 @app.post("/api/ask")
 def ask_question(request: QuestionRequest):
-    # Starts an isolated, dedicated OS thread to bypass the async event loop and prevent locks
+    # Offload processing loop onto an isolated native OS thread to shield FastAPI's async scheduler
     thread = threading.Thread(
         target=run_agent_pipeline_background, 
         args=(request.prompt, request.webhook_url)
@@ -248,7 +290,7 @@ def ask_question(request: QuestionRequest):
     
     return {
         "status": "processing",
-        "message": "The multi-agent execution loop has successfully started in a dedicated background process thread."
+        "message": "The extended multi-agent pipeline workflow sequence has launched in a background thread."
     }
 
 @app.get("/api/solutions/{solution_id}")
@@ -258,7 +300,7 @@ def get_solution(solution_id: int):
     cursor.execute("SELECT id, prompt, solution, timestamp FROM solutions WHERE id = ?", (solution_id,))
     row = cursor.fetchone()
     conn.close()
-    if not row: raise HTTPException(status_code=404, detail="Solution record not found.")
+    if not row: raise HTTPException(status_code=404, detail="Solution archive index record not found.")
     return {"id": row[0], "prompt": row[1], "solution": row[2], "timestamp": row[3]}
 
 if __name__ == "__main__":
