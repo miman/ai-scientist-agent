@@ -3,7 +3,7 @@ version: '3.8'
 services:
   hermes_api:
     image: localhost/ai-scientist_hermes_api:latest
-    container_name: hermes_api_server
+    container_name: ai_scientist_agents
     ports:
       - "8500:8500"
     environment:
@@ -25,7 +25,7 @@ services:
 
   chromadb:
     image: docker.io/chromadb/chroma:latest
-    container_name: chromadb
+    container_name: ai_scientist_agents_chromadb
     volumes:
       - chroma_data:/chroma
     ports:

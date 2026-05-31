@@ -126,12 +126,12 @@ Once setup signals absolute uptime, confirm component operational integrity via 
 ```bash
 podman ps
 ```
-*Ensure both `hermes_api_server` (Port `8500`) and `chromadb` (Port `8000`) present active execution health statuses.*
+*Ensure both `ai_scientist_agents` (Port `8500`) and `ai_scientist_agents_chromadb` (Port `8000`) present active execution health statuses.*
 
 ### 2. Tail Streamed Agent Diagnostics
 Track agent analytical deliberations, search mutations, embedding additions, and DeepSeek validation thoughts directly via stdout streams:
 ```bash
-podman logs -f hermes_api_server
+podman logs -f ai_scientist_agents
 ```
 
 ### 3. Conduct Integration Flight Test

@@ -22,7 +22,7 @@ curl -X POST http://localhost:8500/api/ask \
 
 🕵️‍♂️ Vad som kommer hända under huven (och vad du ska hålla utkik efter i loggarna!)
 
-När du kör detta och bevakar din terminal med podman logs -f hermes_api_server, kommer du att få se hela din arkitektur briljera steg för steg:
+När du kör detta och bevakar din terminal med podman logs -f ai_scientist_agents, kommer du att få se hela din arkitektur briljera steg för steg:
 1. Agent 1 (Sökagenten) gör Triage
 
     Förväntat beteende: Google släppte nyligen sitt helt nya och uppdaterade SDK (@google/genai) som ersätter det gamla @google/generative-ai. Eftersom qwen3.5 vet att detta är ett specifikt externt bibliotek, bör den fatta ett kognitivt beslut att söka.

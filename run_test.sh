@@ -70,4 +70,4 @@ fi
 
 echo "🎯 Pipeline har startats i bakgrunden!"
 echo "👉 Följ agenternas arbete i realtid med:"
-echo "   $CONTAINER_ENGINE logs -f hermes_api_server"
+echo "   $CONTAINER_ENGINE logs -f ai_scientist_agents"
