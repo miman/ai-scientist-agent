@@ -1,5 +1,4 @@
 chromadb
-duckduckgo-search
 langchain-community
 fastapi
 uvicorn

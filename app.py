@@ -6,7 +6,6 @@ import requests
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List
-from duckduckgo_search import DDGS
 from bs4 import BeautifulSoup
 from prompts.prompts import get_prompt
 
@@ -67,7 +66,7 @@ class QuestionRequest(BaseModel):
 # ==========================================
 def tool_web_search(query: str) -> str:
     """
-    Executes a web search query via DuckDuckGo with progressive fallback layers.
+    Executes a web search query via a self-hosted SearXNG instance.
     Scrapes full HTML content from successful page hits up to a predefined quota.
 
     Args:
@@ -80,94 +79,77 @@ def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
     web_pages_extracted = []
     
+    searxng_url = os.getenv("SEARXNG_URL", "http://192.168.68.100:8080")
+    
     try:
-        print(f"📡 [Tool: Search] Initializing safe connection wrapper for query: '{query}'", flush=True)
+        print(f"📡 [Tool: Search] Querying self-hosted SearXNG instance at: {searxng_url} with query: '{query}'", flush=True)
         
-        with DDGS() as ddgs:
-            search_results = []
+        endpoint = f"{searxng_url.rstrip('/')}/search"
+        params = {
+            "q": query,
+            "format": "json"
+        }
+        
+        response = requests.get(endpoint, params=params, timeout=15)
+        response.raise_for_status()
+        search_results = response.json().get("results", [])
+        
+        print(f"🔍 [Tool: Search] Total available target links from SearXNG: {len(search_results)}", flush=True)
+        
+        success_count = 0
+        for i, r in enumerate(search_results):
+            url = r.get('url')
+            title = r.get('title', 'Untitled Destination')
+            snippet_backup = r.get('content') or ''
+            
+            if not url:
+                continue
+                
+            print(f"🌐 [Scraper] Processing Index Position #{i+1} Target Link -> {url}", flush=True)
+            
             try:
-                # Execution Attempt 1: Standard organic text search
-                search_results = list(ddgs.text(query, max_results=10))
-            except Exception as e:
-                print(f"⚠️ Primary text search blocked or timed out: {e}", flush=True)
-            
-            # CRITICAL FALLBACK 1: If organic text search is blocked, immediately pivot to the News index!
-            if not search_results:
-                print("🔄 [Tool: Search] Organic index empty. Pivoting immediately to DuckDuckGo News index...", flush=True)
-                try:
-                    news_results = list(ddgs.news(query, max_results=5))
-                    search_results = [{"href": n.get("url"), "title": n.get("title"), "body": n.get("body")} for n in news_results]
-                except Exception as news_err:
-                    print(f"⚠️ News index pivot failed as well: {news_err}", flush=True)
-
-            # CRITICAL FALLBACK 2: If still empty, trim keywords to a bare-minimum macro query
-            if not search_results:
-                print("🔄 [Tool: Search] News index empty. Retrying with ultra-trimmed macro keywords...", flush=True)
-                try:
-                    macro_query = " ".join(query.split()[:2])
-                    search_results = list(ddgs.text(macro_query, max_results=5))
-                except Exception as macro_err:
-                    print(f"⚠️ Macro keyword recovery failed: {macro_err}", flush=True)
-
-            print(f"🔍 [Tool: Search] Total available target links after recovery phases: {len(search_results)}", flush=True)
-            
-            success_count = 0
-            for i, r in enumerate(search_results):
-                url = r.get('href')
-                title = r.get('title', 'Untitled Destination')
-                snippet_backup = r.get('body') or r.get('snippet') or ''
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                }
+                page_response = requests.get(url, headers=headers, timeout=6)
                 
-                if not url:
-                    continue
+                if page_response.status_code == 200:
+                    soup = BeautifulSoup(page_response.text, "html.parser")
                     
-                print(f"🌐 [Scraper] Processing Index Position #{i+1} Target Link -> {url}", flush=True)
+                    for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
+                        element.extract()
+                        
+                    page_text = soup.get_text()
+                    clean_text = " ".join(page_text.split())
+                    trimmed_content = " ".join(clean_text.split()[:800])
+                    
+                    if len(trimmed_content.strip()) > 200:
+                        print(f"✅ [Scraper] Successfully extracted {len(trimmed_content.split())} words of deep context from Link #{i+1}", flush=True)
+                        web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
+                        
+                        success_count += 1
+                        if success_count >= 3:
+                            print("🎯 Target quota of 3 deeply scraped pages satisfied. Breaking list loop.", flush=True)
+                            break
+                        continue
+                        
+                print(f"⚠️ Link #{i+1} returned bad status layout ({page_response.status_code}). Appending snippet backup and rolling to next link.", flush=True)
+                clean_snippet = " ".join(snippet_backup.split())
+                web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
                 
-                try:
-                    headers = {
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    }
-                    page_response = requests.get(url, headers=headers, timeout=6)
-                    
-                    if page_response.status_code == 200:
-                        soup = BeautifulSoup(page_response.text, "html.parser")
-                        
-                        for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
-                            element.extract()
-                            
-                        page_text = soup.get_text()
-                        clean_text = " ".join(page_text.split())
-                        trimmed_content = " ".join(clean_text.split()[:800])
-                        
-                        if len(trimmed_content.strip()) > 200:
-                            print(f"✅ [Scraper] Successfully extracted {len(trimmed_content.split())} words of deep context from Link #{i+1}", flush=True)
-                            web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
-                            
-                            # CORRECTED: Only increment count and check quota when a FULL extraction succeeds
-                            success_count += 1
-                            if success_count >= 3:
-                                print("🎯 Target quota of 3 deeply scraped pages satisfied. Breaking list loop.", flush=True)
-                                break
-                            continue
-                            
-                    # FIXED: Appends snippet backup context but does NOT increment success_count, allowing loop progression
-                    print(f"⚠️ Link #{i+1} returned bad status layout ({page_response.status_code}). Appending snippet backup and rolling to next link.", flush=True)
-                    clean_snippet = " ".join(snippet_backup.split())
-                    web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
-                    
-                except Exception as scrape_error:
-                    # FIXED: Handles scrape exceptions defensively without counting them toward the target quota
-                    print(f"⚠️ Connection failure on Link #{i+1} ({scrape_error}). Appending snippet backup and rolling to next link.", flush=True)
-                    clean_snippet = " ".join(snippet_backup.split())
-                    web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
-                    
-                if success_count >= 3:
-                    break
+            except Exception as scrape_error:
+                print(f"⚠️ Connection failure on Link #{i+1} ({scrape_error}). Appending snippet backup and rolling to next link.", flush=True)
+                clean_snippet = " ".join(snippet_backup.split())
+                web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
+                
+            if success_count >= 3:
+                break
 
         if web_pages_extracted:
             return "\n\n---\n\n".join(web_pages_extracted)
             
-        print("⚠️ All search parameters and fallbacks resulted in empty datasets.", flush=True)
+        print("⚠️ All search parameters resulted in empty datasets.", flush=True)
         return "Factual context check: Searching for real-time market data returned no active text snippets. Target valuation analysis using standard fundamental metrics."
             
     except Exception as e:
