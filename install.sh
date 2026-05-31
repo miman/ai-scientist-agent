@@ -12,7 +12,7 @@ echo ""
 
 # Standard-URL för din externa Ollama och SearXNG
 DEFAULT_OLLAMA_URL="http://192.168.68.100:11434"
-DEFAULT_SEARXNG_URL="http://192.168.68.100:8080"
+DEFAULT_SEARXNG_URL="http://192.168.68.100:4522"
 
 read -p "Ange URL till din Ollama-instans [$DEFAULT_OLLAMA_URL]: " OLLAMA_URL
 if [ -z "$OLLAMA_URL" ]; then
