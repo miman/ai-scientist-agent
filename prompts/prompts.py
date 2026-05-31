@@ -50,24 +50,32 @@ DEFAULT_PROMPTS = {
 # The folder to search for custom override text files
 PROMPTS_DIR = os.getenv("PROMPTS_DIR", "prompts")
 
-def get_prompt(agent_name: str) -> str:
+def get_prompt(agent_name: str, specialty: str = "general") -> str:
     """
     Get the system prompt for a specific agent.
-    First checks if a text file exists at {PROMPTS_DIR}/{agent_name}.txt.
+    First checks if a text file exists at {PROMPTS_DIR}/{specialty}/{agent_name}.txt.
     If it does, reads and returns its contents.
+    Otherwise, checks at {PROMPTS_DIR}/general/{agent_name}.txt or {PROMPTS_DIR}/{agent_name}.txt.
     Otherwise, returns the default prompt defined in DEFAULT_PROMPTS.
     """
     if agent_name not in DEFAULT_PROMPTS:
         raise ValueError(f"Unknown agent name: '{agent_name}'. Available options: {list(DEFAULT_PROMPTS.keys())}")
         
-    custom_path = os.path.join(PROMPTS_DIR, f"{agent_name}.txt")
-    if os.path.exists(custom_path):
-        try:
-            with open(custom_path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    return content
-        except Exception as e:
-            print(f"⚠️ Error reading custom prompt from {custom_path}: {e}. Falling back to default.")
+    # Attempt paths hierarchically
+    paths_to_try = [
+        os.path.join(PROMPTS_DIR, specialty, f"{agent_name}.txt"),
+        os.path.join(PROMPTS_DIR, "general", f"{agent_name}.txt"),
+        os.path.join(PROMPTS_DIR, f"{agent_name}.txt")
+    ]
+    
+    for custom_path in paths_to_try:
+        if os.path.exists(custom_path):
+            try:
+                with open(custom_path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        return content
+            except Exception as e:
+                print(f"⚠️ Error reading custom prompt from {custom_path}: {e}. Trying next path.")
             
     return DEFAULT_PROMPTS[agent_name]

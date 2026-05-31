@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from duckduckgo_search import DDGS
 from bs4 import BeautifulSoup
-from prompts import get_prompt
+from prompts.prompts import get_prompt
 
 app = FastAPI(title="Hermes AI Adaptive Multi-Agent Problem Solver API")
 
@@ -178,10 +178,34 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
         print(f"⚠️ Error calling Ollama ({model_name}): {e}", flush=True)
         return f"Internal generation pipeline error/timeout: {str(e)}"
 
-def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
+def agent_router(original_prompt: str) -> str:
+    print(f"🎯 [Orchestrator Router] Analyzing query and selecting domain specialty...", flush=True)
+    system_prompt = (
+        "You are an expert dispatcher router.\n"
+        "Analyze the user query and classify it into EXACTLY one of these specialties:\n"
+        "- code (For software development, scripting, debugging, logic design, databases, configuration files)\n"
+        "- finance (For stock analysis, wealth, metrics, accounting, valuation, market economics)\n"
+        "- medical (For health, medicine, biological sciences, drug interactions)\n"
+        "- general (For any other topics, reasoning, or general queries)\n\n"
+        "Output ONLY the single classification word (e.g. 'code' or 'finance' or 'medical' or 'general'). Do not write any other text."
+    )
+    classification = call_hermes_llm(system_prompt, original_prompt, model_name=MODEL_CONFIG["planner"])
+    specialty = classification.strip().lower()
+    
+    # Safe validation fallback
+    valid_specialties = ["code", "finance", "medical", "general"]
+    for s in valid_specialties:
+        if s in specialty:
+            print(f"🎯 [Orchestrator Router] Routed to specialty: '{s}'", flush=True)
+            return s
+            
+    print("🎯 [Orchestrator Router] Routing fallback triggered: 'general'", flush=True)
+    return "general"
+
+def agent_searcher(prompt: str, history_context: str = "", specialty: str = "general") -> Optional[str]:
     print(f"🕵️‍♂️ [Agent 1: Searcher] Assessing if web search or supplementary data is needed...", flush=True)
     
-    system_prompt = get_prompt("searcher")
+    system_prompt = get_prompt("searcher", specialty=specialty)
     
     user_content = f"TARGET REQUEST:\n{prompt}"
     if history_context:
@@ -207,18 +231,18 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
     print("⚠️ [Agent 1: Searcher] Search parsing format variant caught. Running query fallback directly.", flush=True)
     return tool_web_search(prompt)
 
-def agent_processor(raw_data: str) -> str:
+def agent_processor(raw_data: str, specialty: str = "general") -> str:
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
-    system_prompt = get_prompt("processor")
+    system_prompt = get_prompt("processor", specialty=specialty)
     return call_hermes_llm(
         system_prompt, 
         raw_data, 
         model_name=MODEL_CONFIG["processor"]
     )
 
-def agent_planner(original_prompt: str, accumulated_context: str) -> str:
+def agent_planner(original_prompt: str, accumulated_context: str, specialty: str = "general") -> str:
     print(f"📋 [Agent 2.5: Planner] Engineering strategic blueprint layout...", flush=True)
-    system_prompt = get_prompt("planner")
+    system_prompt = get_prompt("planner", specialty=specialty)
     user_content = f"COMPLETE ACCUMULATED KNOWLEDGE:\n{accumulated_context}\n\nORIGINAL REQUEST TARGETS:\n{original_prompt}"
     blueprint_output = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
     
@@ -228,20 +252,20 @@ def agent_planner(original_prompt: str, accumulated_context: str) -> str:
     
     return blueprint_output
 
-def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str) -> str:
+def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str, specialty: str = "general") -> str:
     print(f"🧠 [Agent 3: Expert] Assembling comprehensive solution matrix...", flush=True)
     
     print(f"\n[=== RESEARCH SEARCH EXTRACT SENT TO EXPERT ===]", flush=True)
     print(accumulated_context, flush=True)
     print(f"[==============================================]\n", flush=True)
     
-    system_prompt = get_prompt("expert")
+    system_prompt = get_prompt("expert", specialty=specialty)
     user_content = f"ACCUMULATED KNOWLEDGE LOG:\n{accumulated_context}\n\nBLUEPRINT MATRIX:\n{blueprint}\n\nTARGET USER PROMPT:\n{original_prompt}"
     return call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["expert"])
 
-def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
+def agent_critic(original_prompt: str, solution: str, loop_count: int, specialty: str = "general") -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Auditing structural composition (Attempt {loop_count})...", flush=True)
-    system_prompt = get_prompt("critic")
+    system_prompt = get_prompt("critic", specialty=specialty)
     user_content = f"ORIGINAL USER TARGET:\n{original_prompt}\n\nPROPOSED SOLUTION STRATEGEMS:\n{solution}"
     review_result = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["critic"])
     
@@ -253,9 +277,9 @@ def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[
         return True, review_result
     return False, review_result
 
-def agent_sanitizer(raw_solution: str) -> str:
+def agent_sanitizer(raw_solution: str, specialty: str = "general") -> str:
     print("✨ [Agent 4.5: Sanitizer] Extracting pristine technical content...", flush=True)
-    system_prompt = get_prompt("sanitizer")
+    system_prompt = get_prompt("sanitizer", specialty=specialty)
     return call_hermes_llm(system_prompt, raw_solution, model_name=MODEL_CONFIG["sanitizer"])
 
 def agent_archiver(original_prompt: str, final_solution: str) -> int:
@@ -272,7 +296,8 @@ def agent_archiver(original_prompt: str, final_solution: str) -> int:
 # 3. CORE ORCHESTRATION PIPELINE
 # ==========================================
 def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
-    print(f"🚀 Launching adaptive multi-agent research loop for: '{user_problem[:40]}...'", flush=True)
+    specialty = agent_router(user_problem)
+    print(f"🚀 Launching adaptive multi-agent research loop for: '{user_problem[:40]}...' [Specialty: {specialty.upper()}]", flush=True)
     loop_count = 1
     
     research_log: List[str] = []
@@ -282,27 +307,27 @@ def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] 
         while True:
             history_context = "\n\n".join(pipeline_history)
             
-            raw_info = agent_searcher(user_problem, history_context=history_context)
+            raw_info = agent_searcher(user_problem, history_context=history_context, specialty=specialty)
             if raw_info:
-                fresh_facts = agent_processor(raw_info)
+                fresh_facts = agent_processor(raw_info, specialty=specialty)
                 if fresh_facts.strip() and "error" not in fresh_facts.lower():
                     research_log.append(fresh_facts)
             
             accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
             
-            blueprint = agent_planner(user_problem, accumulated_context)
+            blueprint = agent_planner(user_problem, accumulated_context, specialty=specialty)
                 
             if history_context:
                 blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
             
-            solution = agent_expert(user_problem, blueprint, accumulated_context)
-            approved, feedback = agent_critic(user_problem, solution, loop_count)
+            solution = agent_expert(user_problem, blueprint, accumulated_context, specialty=specialty)
+            approved, feedback = agent_critic(user_problem, solution, loop_count, specialty=specialty)
             
             if approved or loop_count >= 5:
                 if loop_count >= 5 and not approved:
                     print("⚠️ Maximum correction cycles hit. Archiving best available variant draft.", flush=True)
                 
-                polished_solution = agent_sanitizer(solution)
+                polished_solution = agent_sanitizer(solution, specialty=specialty)
                 db_id = agent_archiver(user_problem, polished_solution)
                 print(f"🎉 Pipeline successfully concluded! Saved under SQLite row key entry: {db_id}", flush=True)
                 
