@@ -79,7 +79,7 @@ def tool_web_search(query: str) -> str:
     query = query.strip('"').strip("'")
     web_pages_extracted = []
     
-    searxng_url = os.getenv("SEARXNG_URL", "http://192.168.68.100:8080")
+    searxng_url = os.getenv("SEARXNG_URL", "http://192.168.68.100:4522")
     
     try:
         print(f"📡 [Tool: Search] Querying self-hosted SearXNG instance at: {searxng_url} with query: '{query}'", flush=True)
@@ -279,11 +279,15 @@ def agent_processor(raw_data: str, specialty: str = "general") -> str:
     """
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
     system_prompt = get_prompt("processor", specialty=specialty)
-    return call_llm(
+    processed_output = call_llm(
         system_prompt, 
         raw_data, 
         model_name=MODEL_CONFIG["processor"]
     )
+    print(f"\n[=== PROCESSOR CONDENSED FACTS ===]", flush=True)
+    print(processed_output, flush=True)
+    print(f"[==================================]\n", flush=True)
+    return processed_output
 
 def agent_planner(original_prompt: str, accumulated_context: str, specialty: str = "general") -> str:
     """
@@ -331,7 +335,13 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str,
     
     system_prompt = get_prompt("expert", specialty=specialty)
     user_content = f"ACCUMULATED KNOWLEDGE LOG:\n{accumulated_context}\n\nBLUEPRINT MATRIX:\n{blueprint}\n\nTARGET USER PROMPT:\n{original_prompt}"
-    return call_llm(system_prompt, user_content, model_name=MODEL_CONFIG["expert"])
+    expert_solution = call_llm(system_prompt, user_content, model_name=MODEL_CONFIG["expert"])
+    
+    print(f"\n[=== EXPERT GENERATED SOLUTION ===]", flush=True)
+    print(expert_solution, flush=True)
+    print(f"[==================================]\n", flush=True)
+    
+    return expert_solution
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int, specialty: str = "general") -> tuple[bool, str]:
     """
