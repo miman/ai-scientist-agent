@@ -56,6 +56,18 @@ echo "------------------------------------------------"
 # Städa upp den temporära filen
 rm -f "$TMP_JSON"
 
+# Load container engine setting
+if [ -f .env ]; then
+    CONTAINER_ENGINE=$(grep -E "^CONTAINER_ENGINE=" .env | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+fi
+if [ -z "$CONTAINER_ENGINE" ]; then
+    if command -v podman &> /dev/null; then
+        CONTAINER_ENGINE="podman"
+    else
+        CONTAINER_ENGINE="docker"
+    fi
+fi
+
 echo "🎯 Pipeline har startats i bakgrunden!"
 echo "👉 Följ agenternas arbete i realtid med:"
-echo "   podman logs -f hermes_api_server"
+echo "   $CONTAINER_ENGINE logs -f hermes_api_server"
