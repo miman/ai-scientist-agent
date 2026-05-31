@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from duckduckgo_search import DDGS
 from bs4 import BeautifulSoup
+from prompts import get_prompt
 
 app = FastAPI(title="Hermes AI Adaptive Multi-Agent Problem Solver API")
 
@@ -180,14 +181,7 @@ def call_hermes_llm(system_prompt: str, user_content: str, model_name: str) -> s
 def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
     print(f"🕵️‍♂️ [Agent 1: Searcher] Assessing if web search or supplementary data is needed...", flush=True)
     
-    system_prompt = (
-        "You are an information retrieval triage specialist.\n"
-        "Determine if we must query the live web to fetch real-time facts, specific data points, documentation, or answers to fulfill the request.\n"
-        "If previous loop execution history is attached, analyze the missing gaps or rejections and generate a search query specifically targeted at finding the data needed to resolve those rejections.\n\n"
-        "You MUST respond in EXACTLY one of these formats:\n"
-        "DECISION: NO\n"
-        "DECISION: YES | SEARCH_QUERY: keywords focusing only on what is missing"
-    )
+    system_prompt = get_prompt("searcher")
     
     user_content = f"TARGET REQUEST:\n{prompt}"
     if history_context:
@@ -215,24 +209,16 @@ def agent_searcher(prompt: str, history_context: str = "") -> Optional[str]:
 
 def agent_processor(raw_data: str) -> str:
     print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
+    system_prompt = get_prompt("processor")
     return call_hermes_llm(
-        "You are an advanced data extraction assistant. Read the provided raw text data segments.\n"
-        "Isolate and pull out ALL vital metrics, values, core statistics, dates, constraints, and direct factual answers matching the request requirements.\n"
-        "Format the result as a concise bulleted itemized list of facts under 250 words. Completely avoid narrative filler or conversational explanations.", 
+        system_prompt, 
         raw_data, 
         model_name=MODEL_CONFIG["processor"]
     )
 
 def agent_planner(original_prompt: str, accumulated_context: str) -> str:
     print(f"📋 [Agent 2.5: Planner] Engineering strategic blueprint layout...", flush=True)
-    system_prompt = (
-        "You are a sharp Project Planner and System Architect.\n"
-        "Review the user query and the accumulated data points context log.\n"
-        "Draft a direct, clear, and straightforward structural blueprint for the final response.\n"
-        "Specify exactly what structural layout sections, data parameters, logic structures, or evaluation conclusions the expert must provide.\n"
-        "Match the scale and depth of the blueprint to the complexity of the question. Do not bloat simple requests.\n"
-        "Do not write the final answer text or code yourself. Output ONLY the list of step-by-step blueprint guidelines."
-    )
+    system_prompt = get_prompt("planner")
     user_content = f"COMPLETE ACCUMULATED KNOWLEDGE:\n{accumulated_context}\n\nORIGINAL REQUEST TARGETS:\n{original_prompt}"
     blueprint_output = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
     
@@ -249,28 +235,13 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str)
     print(accumulated_context, flush=True)
     print(f"[==============================================]\n", flush=True)
     
-    system_prompt = (
-        "You are an expert Subject Matter Engineer and Technical Writer.\n"
-        "Your task is to craft a flawless, production-ready solution following the provided blueprint instructions.\n"
-        "CRITICAL: You must explicitly ground your answer using the data, numbers, logic parameters, and variables provided inside the ACCUMULATED CONTEXT.\n"
-        "If code is requested, output complete scripts with error handling. If reports are requested, output a deep data-driven analysis."
-    )
+    system_prompt = get_prompt("expert")
     user_content = f"ACCUMULATED KNOWLEDGE LOG:\n{accumulated_context}\n\nBLUEPRINT MATRIX:\n{blueprint}\n\nTARGET USER PROMPT:\n{original_prompt}"
     return call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["expert"])
 
 def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[bool, str]:
     print(f"⚖️ [Agent 4: Critic] Auditing structural composition (Attempt {loop_count})...", flush=True)
-    system_prompt = (
-        "You are a strict, cynical, and highly analytical Senior Quality Auditor.\n"
-        "Your single task is to perform an intense audit on the proposed solution against the original user requirements.\n\n"
-        "CRITICAL GUIDELINES:\n"
-        "- If a report or text analysis is requested, check if real-world metrics, numbers, or specific required data points are missing, vague, or filled with placeholder descriptions.\n"
-        "- If code is requested, check for logical bugs, syntax breaks, optimization failures, or missing handling mechanisms.\n\n"
-        "You MUST explicitly write exactly one of these verdict tokens in your audit summary:\n"
-        "VERDICT: APPROVED (Only if the text completely satisfies the user perfectly without flaws)\n"
-        "VERDICT: REJECTED (If facts are missing, numbers are absent, or improvements are critically needed)\n\n"
-        "Provide a concrete explanation detailing exactly what data, variables, or features are missing so the pipeline can fix it."
-    )
+    system_prompt = get_prompt("critic")
     user_content = f"ORIGINAL USER TARGET:\n{original_prompt}\n\nPROPOSED SOLUTION STRATEGEMS:\n{solution}"
     review_result = call_hermes_llm(system_prompt, user_content, model_name=MODEL_CONFIG["critic"])
     
@@ -284,12 +255,7 @@ def agent_critic(original_prompt: str, solution: str, loop_count: int) -> tuple[
 
 def agent_sanitizer(raw_solution: str) -> str:
     print("✨ [Agent 4.5: Sanitizer] Extracting pristine technical content...", flush=True)
-    system_prompt = (
-        "You are a professional Technical Editor.\n"
-        "Take the approved solution and strip out all conversational filler, chat pleasantries, or pipeline internal remarks.\n"
-        "Remove text like 'Sure here is the edit', 'I have added the stock numbers as requested', or 'Let me know if you need anything else'.\n"
-        "Retain 100% of the core report data, markdown structural layouts, or code objects intact. Output ONLY the clean result."
-    )
+    system_prompt = get_prompt("sanitizer")
     return call_hermes_llm(system_prompt, raw_solution, model_name=MODEL_CONFIG["sanitizer"])
 
 def agent_archiver(original_prompt: str, final_solution: str) -> int:
