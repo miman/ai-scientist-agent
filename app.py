@@ -329,9 +329,9 @@ def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str,
     """
     print(f"🧠 [Agent 3: Expert] Assembling comprehensive solution matrix...", flush=True)
     
-    print(f"\n[=== RESEARCH SEARCH EXTRACT SENT TO EXPERT ===]", flush=True)
-    print(accumulated_context, flush=True)
-    print(f"[==============================================]\n", flush=True)
+#    print(f"\n[=== RESEARCH SEARCH EXTRACT SENT TO EXPERT ===]", flush=True)
+#    print(accumulated_context, flush=True)
+#    print(f"[==============================================]\n", flush=True)
     
     system_prompt = get_prompt("expert", specialty=specialty)
     user_content = f"ACCUMULATED KNOWLEDGE LOG:\n{accumulated_context}\n\nBLUEPRINT MATRIX:\n{blueprint}\n\nTARGET USER PROMPT:\n{original_prompt}"
