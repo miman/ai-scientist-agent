@@ -11,16 +11,18 @@ from prompts.prompts import get_prompt
 
 app = FastAPI(title="Hermes AI Adaptive Multi-Agent Problem Solver API")
 
+base_model = os.getenv("BASE_MODEL", "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL")
+
 # ==========================================
 # CONFIGURATION: AGENT MODELS
 # ==========================================
 MODEL_CONFIG = {
-    "searcher": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
-    "processor": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
-    "planner": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
-    "expert": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
-    "critic": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
-    "sanitizer": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL"
+    "searcher": base_model,
+    "processor": base_model,
+    "planner": base_model,
+    "expert": base_model,
+    "critic": base_model,
+    "sanitizer": base_model
 }
 
 # ==========================================

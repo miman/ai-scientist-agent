@@ -15,11 +15,13 @@ if [ -f .env ]; then
     ENV_OLLAMA=$(grep -E "^OLLAMA_URL=" .env | cut -d'=' -f2- | tr -d '"' | tr -d "'")
     ENV_SEARXNG=$(grep -E "^SEARXNG_URL=" .env | cut -d'=' -f2- | tr -d '"' | tr -d "'")
     CONTAINER_ENGINE=$(grep -E "^CONTAINER_ENGINE=" .env | cut -d'=' -f2- | tr -d '"' | tr -d "'")
+    BASE_MODEL=$(grep -E "^BASE_MODEL=" .env | cut -d'=' -f2- | tr -d '"' | tr -d "'")
 fi
 
 # Standard-URL för din externa Ollama och SearXNG
 DEFAULT_OLLAMA_URL="${ENV_OLLAMA:-http://192.168.68.100:11434}"
 DEFAULT_SEARXNG_URL="${ENV_SEARXNG:-http://192.168.68.100:4522}"
+DEFAULT_BASE_MODEL="${ENV_BASE_MODEL:-hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL}"
 
 read -p "Ange URL till din Ollama-instans [$DEFAULT_OLLAMA_URL]: " OLLAMA_URL
 if [ -z "$OLLAMA_URL" ]; then
@@ -59,6 +61,7 @@ fi
 echo "OLLAMA_URL=$OLLAMA_URL" > .env
 echo "SEARXNG_URL=$SEARXNG_URL" >> .env
 echo "CONTAINER_ENGINE=$CONTAINER_ENGINE" >> .env
+echo "BASE_MODEL=$BASE_MODEL" >> .env
 echo -e "${GREEN}✓ Konfiguration sparad i .env-filen.${NC}"
 
 # Ställ in kommandon baserat på vald motor
@@ -91,4 +94,5 @@ echo -e "${GREEN} Web UI lyssnar på: http://localhost:8501${NC}"
 echo -e "${GREEN} API:et lyssnar på: http://localhost:8500${NC}"
 echo -e "${GREEN} Ollama är kopplad till: $OLLAMA_URL${NC}"
 echo -e "${GREEN} SearXNG är kopplad till: $SEARXNG_URL${NC}"
+echo -e "${GREEN} BASE_MODEL är kopplad till: $BASE_MODEL${NC}"
 echo -e "${GREEN}===============================================${NC}"
