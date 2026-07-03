@@ -33,6 +33,22 @@ services:
     networks:
       - hermes-net
 
+  hermes_ui:
+    image: localhost/ai-scientist_hermes_api:latest # Reuse the same built image
+    container_name: ai_scientist_ui
+    ports:
+      - "8501:8501"
+    volumes:
+      - .:/app
+      - sqlite_data:/app/db_data
+    environment:
+      - OLLAMA_URL=${OLLAMA_URL}
+    command: streamlit run ui.py --server.port=8501 --server.address=0.0.0.0
+    depends_on:
+      - hermes_api
+    networks:
+      - hermes-net
+
 volumes:
   chroma_data:
   sqlite_data:

@@ -29,6 +29,34 @@ MODEL_CONFIG = {
 DB_DIR = "/app/db_data"
 DB_PATH = os.path.join(DB_DIR, "agent_archive.db")
 
+# In-memory store for active runs: { task_id: { "prompt": "...", "status": "Running", "current_agent": "Searcher", "loop": 1, "logs": [...] } }
+LIVE_TRACKING = {}
+
+@app.get("/api/status")
+def get_live_status():
+    """Returns all active or recently completed live runs."""
+    return LIVE_TRACKING
+
+@app.get("/api/solutions")
+def get_all_solutions():
+    """
+    Exposes a FastAPI GET route to pull a lightweight list of all 
+    archived solutions out of SQLite storage for UI history listing.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        # We only pull ID, prompt, and timestamp so we don't load massive code payloads all at once
+        cursor.execute("SELECT id, prompt, timestamp FROM solutions ORDER BY id DESC")
+        rows = cursor.fetchall()
+        solutions = [{"id": r[0], "prompt": r[1], "timestamp": r[2]} for r in rows]
+    except Exception as e:
+        solutions = []
+        print(f"⚠️ Error fetching history: {e}", flush=True)
+    finally:
+        conn.close()
+    return solutions
+
 def init_sqlite():
     """
     Initializes the persistent SQLite database and ensures the target directory exists.
@@ -411,63 +439,68 @@ def agent_archiver(original_prompt: str, final_solution: str) -> int:
 # 3. CORE ORCHESTRATION PIPELINE
 # ==========================================
 def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
-    """
-    The orchestrator running the infinite research, planning, execution, and review loop.
-    Manages internal history state across up to 5 iterative modification cycles.
-    Triggers webhooks and persists results automatically upon loop closure.
+    task_id = str(uuid.uuid4())[:8] # Short unique ID for tracking
+    LIVE_TRACKING[task_id] = {
+        "prompt": user_problem,
+        "status": "In Progress",
+        "current_agent": "Router",
+        "loop": 1,
+        "logs": ["🚀 Initializing agent loop..."]
+    }
 
-    Args:
-        user_problem (str): Baseline operational target string input.
-        webhook_url (str, optional): Target endpoint callback address for completions.
-
-    Returns:
-        None
-    """
-    specialty = agent_router(user_problem)
-    print(f"🚀 Launching adaptive multi-agent research loop for: '{user_problem[:40]}...' [Specialty: {specialty.upper()}]", flush=True)
-    loop_count = 1
-    
-    research_log: List[str] = []
-    pipeline_history: List[str] = []
-    
     try:
+        specialty = agent_router(user_problem)
+        LIVE_TRACKING[task_id]["logs"].append(f"🎯 Routed to domain: {specialty.upper()}")
+        
+        loop_count = 1
+        research_log = []
+        pipeline_history = []
+        
         while True:
-            history_context = "\n\n".join(pipeline_history)
+            LIVE_TRACKING[task_id]["current_agent"] = "Searcher"
+            LIVE_TRACKING[task_id]["loop"] = loop_count
+            LIVE_TRACKING[task_id]["logs"].append(f"🔄 Loop {loop_count}: Running Searcher...")
             
+            history_context = "\n\n".join(pipeline_history)
             raw_info = agent_searcher(user_problem, history_context=history_context, specialty=specialty)
+            
             if raw_info:
+                LIVE_TRACKING[task_id]["current_agent"] = "Processor"
+                LIVE_TRACKING[task_id]["logs"].append(f"🧹 Scraping data; running Processor...")
                 fresh_facts = agent_processor(raw_info, specialty=specialty)
                 if fresh_facts.strip() and "error" not in fresh_facts.lower():
                     research_log.append(fresh_facts)
             
-            accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
+            # ... [Keep your existing logic, but update LIVE_TRACKING at each step] ...
             
-            blueprint = agent_planner(user_problem, accumulated_context, specialty=specialty)
-                
-            if history_context:
-                blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
+            LIVE_TRACKING[task_id]["current_agent"] = "Planner"
+            blueprint = agent_planner(user_problem, "\n---\n".join(research_log), specialty=specialty)
             
-            solution = agent_expert(user_problem, blueprint, accumulated_context, specialty=specialty)
+            LIVE_TRACKING[task_id]["current_agent"] = "Expert"
+            solution = agent_expert(user_problem, blueprint, "\n---\n".join(research_log), specialty=specialty)
+            
+            LIVE_TRACKING[task_id]["current_agent"] = "Critic"
             approved, feedback = agent_critic(user_problem, solution, loop_count, specialty=specialty)
             
             if approved or loop_count >= 5:
-                if loop_count >= 5 and not approved:
-                    print("⚠️ Maximum correction cycles hit. Archiving best available variant draft.", flush=True)
-                
+                LIVE_TRACKING[task_id]["current_agent"] = "Sanitizer/Archiver"
                 polished_solution = agent_sanitizer(solution, specialty=specialty)
                 db_id = agent_archiver(user_problem, polished_solution)
-                print(f"🎉 Pipeline successfully concluded! Saved under SQLite row key entry: {db_id}", flush=True)
                 
-                if webhook_url:
-                    try: requests.post(webhook_url, json={"status": "completed", "id": db_id}, timeout=10)
-                    except: pass
+                # Finalize tracking status
+                LIVE_TRACKING[task_id]["status"] = "Completed"
+                LIVE_TRACKING[task_id]["current_agent"] = "Done"
+                LIVE_TRACKING[task_id]["db_id"] = db_id
+                LIVE_TRACKING[task_id]["logs"].append(f"🎉 Success! Archived under SQLite row: {db_id}")
                 break
             else:
                 pipeline_history.append(f"Attempt {loop_count} Rejected.\nCritic Reasonings:\n{feedback}")
+                LIVE_TRACKING[task_id]["logs"].append(f"❌ Rejected by Critic. Re-routing loop...")
                 loop_count += 1
                 
     except Exception as e:
-        print(f"❌ Critical pipeline failure within background process thread: {e}", flush=True)
+        LIVE_TRACKING[task_id]["status"] = "Failed"
+        LIVE_TRACKING[task_id]["logs"].append(f"❌ Error: {str(e)}")
 
 # ==========================================
 # 4. REST API ENDPOINTS
