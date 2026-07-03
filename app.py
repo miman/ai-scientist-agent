@@ -15,12 +15,12 @@ app = FastAPI(title="Hermes AI Adaptive Multi-Agent Problem Solver API")
 # CONFIGURATION: AGENT MODELS
 # ==========================================
 MODEL_CONFIG = {
-    "searcher": "qwen3.5:9b",
-    "processor": "qwen3.5:9b",
-    "planner": "qwen3.5:9b",
-    "expert": "qwen3.5:9b",
-    "critic": "qwen3.5:9b",
-    "sanitizer": "qwen3.5:9b"
+    "searcher": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
+    "processor": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
+    "planner": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
+    "expert": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
+    "critic": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL",
+    "sanitizer": "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL"
 }
 
 # ==========================================
@@ -439,68 +439,128 @@ def agent_archiver(original_prompt: str, final_solution: str) -> int:
 # 3. CORE ORCHESTRATION PIPELINE
 # ==========================================
 def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
-    task_id = str(uuid.uuid4())[:8] # Short unique ID for tracking
+    task_id = str(uuid.uuid4())[:8]
+    
+    # Initialize rich tracking architecture
     LIVE_TRACKING[task_id] = {
         "prompt": user_problem,
         "status": "In Progress",
         "current_agent": "Router",
         "loop": 1,
-        "logs": ["🚀 Initializing agent loop..."]
+        "final_solution": None,
+        "agent_steps": []  # Will hold dicts of each agent's deep telemetry
     }
 
     try:
+        # --- ROUTER ---
         specialty = agent_router(user_problem)
-        LIVE_TRACKING[task_id]["logs"].append(f"🎯 Routed to domain: {specialty.upper()}")
+        LIVE_TRACKING[task_id]["agent_steps"].append({
+            "agent": "Orchestrator Router",
+            "input": f"User Problem: {user_problem}",
+            "action": "Classifying domain intent using planner LLM template.",
+            "output": f"Routed to specialty: {specialty.upper()}"
+        })
         
         loop_count = 1
         research_log = []
         pipeline_history = []
         
         while True:
-            LIVE_TRACKING[task_id]["current_agent"] = "Searcher"
-            LIVE_TRACKING[task_id]["loop"] = loop_count
-            LIVE_TRACKING[task_id]["logs"].append(f"🔄 Loop {loop_count}: Running Searcher...")
-            
             history_context = "\n\n".join(pipeline_history)
+            LIVE_TRACKING[task_id]["loop"] = loop_count
+            
+            # --- SEARCHER ---
+            LIVE_TRACKING[task_id]["current_agent"] = "Searcher"
             raw_info = agent_searcher(user_problem, history_context=history_context, specialty=specialty)
             
+            LIVE_TRACKING[task_id]["agent_steps"].append({
+                "agent": f"Searcher (Loop {loop_count})",
+                "input": f"Prompt: {user_problem}\nHistory Context: {history_context}",
+                "action": "Deciding if web query is needed and invoking SearXNG infrastructure.",
+                "output": raw_info if raw_info else "Decision: No external web search required."
+            })
+            
+            # --- PROCESSOR ---
             if raw_info:
                 LIVE_TRACKING[task_id]["current_agent"] = "Processor"
-                LIVE_TRACKING[task_id]["logs"].append(f"🧹 Scraping data; running Processor...")
                 fresh_facts = agent_processor(raw_info, specialty=specialty)
+                
+                LIVE_TRACKING[task_id]["agent_steps"].append({
+                    "agent": f"Processor (Loop {loop_count})",
+                    "input": f"Raw Web Data: {raw_info[:500]}...",
+                    "action": "Stripping HTML noise, markdown layouts, and parsing core entities.",
+                    "output": fresh_facts
+                })
                 if fresh_facts.strip() and "error" not in fresh_facts.lower():
                     research_log.append(fresh_facts)
             
-            # ... [Keep your existing logic, but update LIVE_TRACKING at each step] ...
+            accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
             
+            # --- PLANNER ---
             LIVE_TRACKING[task_id]["current_agent"] = "Planner"
-            blueprint = agent_planner(user_problem, "\n---\n".join(research_log), specialty=specialty)
+            blueprint = agent_planner(user_problem, accumulated_context, specialty=specialty)
+            if history_context:
+                blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
+                
+            LIVE_TRACKING[task_id]["agent_steps"].append({
+                "agent": f"Planner (Loop {loop_count})",
+                "input": f"Accumulated Context:\n{accumulated_context}\n\nUser Problem: {user_problem}",
+                "action": "Engineering a structured sequential execution plan blueprint.",
+                "output": blueprint
+            })
             
+            # --- EXPERT ---
             LIVE_TRACKING[task_id]["current_agent"] = "Expert"
-            solution = agent_expert(user_problem, blueprint, "\n---\n".join(research_log), specialty=specialty)
+            solution = agent_expert(user_problem, blueprint, accumulated_context, specialty=specialty)
             
+            LIVE_TRACKING[task_id]["agent_steps"].append({
+                "agent": f"Expert (Loop {loop_count})",
+                "input": f"Blueprint:\n{blueprint}\n\nContext:\n{accumulated_context}",
+                "action": "Generating production code or technical documentation asset blocks.",
+                "output": solution
+            })
+            
+            # --- CRITIC ---
             LIVE_TRACKING[task_id]["current_agent"] = "Critic"
             approved, feedback = agent_critic(user_problem, solution, loop_count, specialty=specialty)
             
+            LIVE_TRACKING[task_id]["agent_steps"].append({
+                "agent": f"Critic (Loop {loop_count})",
+                "input": f"Proposed Solution:\n{solution[:500]}...",
+                "action": "Performing static code review and vulnerability scanning against checklist.",
+                "output": f"Approved: {approved}\n\nFeedback:\n{feedback}"
+            })
+            
             if approved or loop_count >= 5:
-                LIVE_TRACKING[task_id]["current_agent"] = "Sanitizer/Archiver"
+                # --- SANITIZER ---
+                LIVE_TRACKING[task_id]["current_agent"] = "Sanitizer"
                 polished_solution = agent_sanitizer(solution, specialty=specialty)
+                
+                LIVE_TRACKING[task_id]["agent_steps"].append({
+                    "agent": "Sanitizer",
+                    "input": f"Raw Approved Solution:\n{solution[:500]}...",
+                    "action": "Removing conversational meta-commentary and markdown leftovers.",
+                    "output": polished_solution
+                })
+                
                 db_id = agent_archiver(user_problem, polished_solution)
                 
-                # Finalize tracking status
                 LIVE_TRACKING[task_id]["status"] = "Completed"
                 LIVE_TRACKING[task_id]["current_agent"] = "Done"
-                LIVE_TRACKING[task_id]["db_id"] = db_id
-                LIVE_TRACKING[task_id]["logs"].append(f"🎉 Success! Archived under SQLite row: {db_id}")
+                LIVE_TRACKING[task_id]["final_solution"] = polished_solution
                 break
             else:
                 pipeline_history.append(f"Attempt {loop_count} Rejected.\nCritic Reasonings:\n{feedback}")
-                LIVE_TRACKING[task_id]["logs"].append(f"❌ Rejected by Critic. Re-routing loop...")
                 loop_count += 1
                 
     except Exception as e:
         LIVE_TRACKING[task_id]["status"] = "Failed"
-        LIVE_TRACKING[task_id]["logs"].append(f"❌ Error: {str(e)}")
+        LIVE_TRACKING[task_id]["agent_steps"].append({
+            "agent": "Crash Reporter",
+            "input": "Pipeline Context",
+            "action": "Catching fatal background thread exception.",
+            "output": f"Critical Error: {str(e)}"
+        })
 
 # ==========================================
 # 4. REST API ENDPOINTS

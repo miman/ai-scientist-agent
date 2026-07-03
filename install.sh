@@ -87,6 +87,7 @@ $COMPOSE_CMD up -d
 echo ""
 echo -e "${GREEN}===============================================${NC}"
 echo -e "${GREEN} 🎉 Systemet är igång via ${CONTAINER_ENGINE}!${NC}"
+echo -e "${GREEN} Web UI lyssnar på: http://localhost:8501${NC}"
 echo -e "${GREEN} API:et lyssnar på: http://localhost:8500${NC}"
 echo -e "${GREEN} Ollama är kopplad till: $OLLAMA_URL${NC}"
 echo -e "${GREEN} SearXNG är kopplad till: $SEARXNG_URL${NC}"
