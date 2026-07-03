@@ -9,7 +9,7 @@ from typing import Optional, List
 from bs4 import BeautifulSoup
 from prompts.prompts import get_prompt
 
-app = FastAPI(title="Hermes AI Adaptive Multi-Agent Problem Solver API")
+app = FastAPI(title="AI Adaptive Multi-Agent Problem Solver API")
 
 base_model = os.getenv("BASE_MODEL", "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL")
 

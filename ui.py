@@ -2,8 +2,8 @@ import streamlit as st
 import requests
 import time
 
-st.set_page_config(page_title="Hermes AI Control Center", layout="wide")
-st.title("🔬 Hermes AI Multi-Agent Control Center")
+st.set_page_config(page_title="AI Control Center", layout="wide")
+st.title("🔬 AI Multi-Agent Control Center")
 
 API_URL = "http://hermes_api:8500" 
 

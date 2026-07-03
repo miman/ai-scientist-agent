@@ -1,4 +1,4 @@
-För att verkligen sätta din Hermes AI Code Scientist på prov och se vad din 5-agent-pipeline går för, vill du ge den en uppgift som tvingar alla agenter att arbeta hårt, men som ändå inte är så gigantisk att din GPU storknar.
+För att verkligen sätta din AI Code Scientist på prov och se vad din 5-agent-pipeline går för, vill du ge den en uppgift som tvingar alla agenter att arbeta hårt, men som ändå inte är så gigantisk att din GPU storknar.
 
 En perfekt testfråga ska uppfylla följande kriterier:
 

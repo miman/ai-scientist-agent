@@ -1,6 +1,6 @@
 # 🛠️ Development & Deployment Guide
 
-This document maps out dependencies, systemic pre-requisites, configuration parameters, and execution vectors required to stand up, optimize, and maintain the **Hermes AI Code Scientist** environment.
+This document maps out dependencies, systemic pre-requisites, configuration parameters, and execution vectors required to stand up, optimize, and maintain the **AI Code Scientist** environment.
 
 ---
 
@@ -81,7 +81,7 @@ Run the setup utility. The system will prompt you for your explicit host network
 
 ```text
 ===============================================
-   Konfiguration av Hermes AI Code Scientist   
+   Konfiguration av AI Code Scientist   
 ===============================================
 
 Ange URL till din Ollama-instans [http://192.168.68.100:11434]: 

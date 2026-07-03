@@ -101,3 +101,49 @@ If a `webhook_url` was specified during the dispatch request, the application wi
   "solution": "```python\nimport re\n...",
 }
 ```
+
+### 🎛️ Live Status Telemetry Stream
+* **Endpoint:** `GET /api/status`
+* **Purpose:** Provides a deep, real-time snapshot of active background workers, loop iterations, and structured individual agent actions.
+* **Response Model (`200 OK`):**
+```json
+{
+  "task_a1b2c3d4": {
+    "prompt": "Write a python loop writing hello world 10 times",
+    "status": "In Progress",
+    "current_agent": "Expert",
+    "loop": 1,
+    "final_solution": null,
+    "agent_steps": [
+      {
+        "agent": "Orchestrator Router",
+        "input": "User Problem: Write a python loop writing hello world 10 times",
+        "action": "Classifying domain intent using planner LLM template.",
+        "output": "Routed to specialty: CODE"
+      },
+      {
+        "agent": "Searcher (Loop 1)",
+        "input": "Prompt: Write a python loop writing hello world 10 times...",
+        "action": "Deciding if web query is needed and invoking SearXNG infrastructure.",
+        "output": "Decision: No external web search required."
+      }
+    ]
+  }
+}
+```
+
+
+### 🗄️ Fetch All Solutions Index
+* **Endpoint**: GET /api/solutions
+* **Purpose**: Returns a list of historic artifacts sorted reverse-chronologically. This index intentionally excludes heavy code payloads to optimize transfer weight.  
+* **Response Model (200 OK)**
+
+```json
+[
+  {
+    "id": 2,
+    "prompt": "Write a complete Node.js streaming function...",
+    "timestamp": "2026-07-04 00:15:22"
+  }
+]
+```

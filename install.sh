@@ -6,7 +6,7 @@ BLUE='\033[034m'
 NC='\033[0m' # No Color
 
 echo -e "${BLUE}===============================================${NC}"
-echo -e "${BLUE}   Konfiguration av Hermes AI Code Scientist   ${NC}"
+echo -e "${BLUE}   Konfiguration av AI Code Scientist   ${NC}"
 echo -e "${BLUE}===============================================${NC}"
 echo ""
 

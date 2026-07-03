@@ -11,7 +11,7 @@ if [ -n "$1" ]; then
 else
     # Interaktiv fallback om inget argument skickades
     echo "💡 Tips: Du kan också köra: $0 \"Din fråga här\""
-    echo -n "🤖 Vad vill du att Hermes Code Scientist ska lösa? "
+    echo -n "🤖 Vad vill du att Code Scientist ska lösa? "
     read -r PROMPT_TEXT
 fi
 
@@ -22,7 +22,7 @@ if [ -z "$PROMPT_TEXT" ]; then
 fi
 
 # 2. Kontrollera att API-servern är vaken
-echo "🔍 Kontrollerar om Hermes API-server är igång på port 8500..."
+echo "🔍 Kontrollerar om API-server är igång på port 8500..."
 if ! curl -s --connect-timeout 2 http://localhost:8500/api/solutions/1 > /dev/null 2>&1; then
     # Vi kollar mot endpoints som vi vet finns, eller bara bas-URL
     if ! curl -s --connect-timeout 2 http://localhost:8500/ > /dev/null; then
@@ -41,7 +41,7 @@ print(json.dumps({"prompt": sys.argv[1]}))
 
 echo "$JSON_BODY" > "$TMP_JSON"
 
-echo "🚀 Skickar förfrågan till Hermes Agent Pipeline..."
+echo "🚀 Skickar förfrågan till Agent Pipeline..."
 echo "------------------------------------------------"
 
 # 4. Skicka till FastAPI
