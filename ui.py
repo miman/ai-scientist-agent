@@ -42,25 +42,44 @@ with left_col:
             status_color = "🟢" if info["status"] == "Completed" else ("🔴" if info["status"] == "Failed" else "⏳")
             
             with st.expander(f"{status_color} Task {task_id}: {info['prompt'][:40]}...", expanded=(info["status"] == "In Progress")):
-                st.write(f"**Overall Status:** {info['status']} | **Active Node:** {info['current_agent']}")
+                current_agent = info.get("current_agent", "N/A")
+                specialty = info.get("specialty", "N/A")
+                loop_count = info.get("loop_count", 1)
+
+                st.write(f"**Overall Status:** {info['status']} | **Active Node:** `{current_agent}`")
                 
-                # --- NEW FEATURE: STEP BY STEP BREAKDOWN ---
-                st.write("---")
-                st.markdown("#### 🕵️‍♂️ Individual Agent Actions Work History:")
-                
-                if not info["agent_steps"]:
-                    st.caption("Initializing framework components...")
-                else:
-                    for i, step in enumerate(info["agent_steps"]):
-                        with st.expander(f"Step {i+1}: {step['agent']}"):
-                            st.markdown("**📥 Agent Input:**")
-                            st.code(step["input"], language="text")
-                            st.markdown(f"**⚙️ What it did:**\n*{step['action']}*")
-                            st.markdown("**📤 Agent Output:**")
+                col_a, col_b = st.columns(2)
+                col_a.metric("Domain Specialty", specialty.upper())
+                col_b.metric("Loop Attempt", f"#{loop_count}")
+
+                tab_summary, tab_steps = st.tabs(["📊 State Artifacts", "🕵️‍♂️ Action History"])
+
+                with tab_summary:
+                    if info.get("blueprint"):
+                        st.markdown("#### 📐 Blueprint Matrix")
+                        st.info(info["blueprint"])
+
+                    if info.get("solution"):
+                        st.markdown("#### 🧠 Draft Solution")
+                        st.markdown(info["solution"])
+
+                    if info.get("critic_feedback"):
+                        st.markdown("#### ⚖️ Critic Audit Feedback")
+                        st.warning(info["critic_feedback"])
+
+                with tab_steps:
+                    agent_steps = info.get("agent_steps", [])
+                    if not agent_steps:
+                        st.caption("Initializing framework components...")
+                    else:
+                        for i, step in enumerate(agent_steps):
+                            st.markdown(f"**Step {i+1}: Node `{step['agent']}`**")
+                            st.caption(f"Input: {step['input']} | Action: {step['action']}")
                             if "```" in step["output"]:
                                 st.markdown(step["output"])
                             else:
-                                st.code(step["output"], language="markdown")
+                                st.code(step["output"], language="json")
+                            st.divider()
                                 
                 # If finished, optionally view final output right here
                 if info["status"] == "Completed" and info.get("final_solution"):

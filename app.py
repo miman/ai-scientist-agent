@@ -61,6 +61,13 @@ def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None)
     LIVE_TRACKING[task_id] = {
         "prompt": user_prompt,
         "status": "In Progress",
+        "current_agent": "Initializing",
+        "specialty": "general",
+        "loop_count": 1,
+        "blueprint": "",
+        "solution": "",
+        "critic_feedback": "",
+        "agent_steps": [],
         "final_solution": None,
     }
 
@@ -85,10 +92,30 @@ def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None)
             "db_id": None,
         }
 
-        # Execute the full graph — blocks until END is reached
-        final_state = pipeline.invoke(initial_state)
+        # Stream through graph execution node by node
+        final_state = dict(initial_state)
+        for chunk in pipeline.stream(initial_state, stream_mode="updates"):
+            for node_name, state_update in chunk.items():
+                LIVE_TRACKING[task_id]["current_agent"] = node_name
+                
+                # Store agent step details
+                step_record = {
+                    "agent": node_name,
+                    "input": f"Loop {final_state.get('loop_count', 1)} | Specialty: {final_state.get('specialty', 'general')}",
+                    "action": f"Executed LangGraph node '{node_name}'",
+                    "output": str(state_update),
+                }
+                LIVE_TRACKING[task_id]["agent_steps"].append(step_record)
+
+                # Merge updates into final_state and LIVE_TRACKING telemetry
+                if isinstance(state_update, dict):
+                    final_state.update(state_update)
+                    for key in ["specialty", "loop_count", "blueprint", "solution", "critic_feedback", "final_solution", "db_id"]:
+                        if key in state_update:
+                            LIVE_TRACKING[task_id][key] = state_update[key]
 
         LIVE_TRACKING[task_id]["status"] = "Completed"
+        LIVE_TRACKING[task_id]["current_agent"] = "END"
         LIVE_TRACKING[task_id]["final_solution"] = final_state.get("final_solution")
         LIVE_TRACKING[task_id]["db_id"] = final_state.get("db_id")
 

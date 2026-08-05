@@ -26,13 +26,17 @@ else
 fi
 
 # 1. Stoppa och ta bort de gamla containrarna helt
+echo "Stoppa och ta bort de gamla containrarna helt..."
 $COMPOSE_CMD down --volumes  # Tar även bort eventuella hängda interna volymer
 
 # 2. Kör en hård ombyggnad av imagen:
+echo "Kör en hård ombyggnad av imagen..."
 $ENGINE_CMD build --no-cache -f Dockerfile -t localhost/ai-scientist_hermes_api:latest .
 
 # 3. Dräpa eventuella dolda Python-cachefiler i din lokala mapp:
+echo "Dräpa eventuella dolda Python-cachefiler i din lokala mapp..."
 find . -type d -name "__pycache__" -exec rm -r {} + 2>/dev/null
 
 # 4. Starta upp allt igen via ditt skript:
+echo "Starta upp allt igen via ditt skript..."
 ./install.sh
