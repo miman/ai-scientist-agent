@@ -1,0 +1,36 @@
+graph TD
+    subgraph docker["Docker Compose Network (hermes-net)"]
+        api["🐍 hermes_api<br/>FastAPI + LangGraph<br/>:8500"]
+        chromadb["🧮 ChromaDB<br/>Vector Store<br/>:8000"]
+        ui["🖥️ hermes_ui<br/>Streamlit UI<br/>:8501"]
+    end
+
+    subgraph host["Host Machine"]
+        ollama["🦙 Ollama<br/>Local LLM Server<br/>:11434"]
+        searxng["🔍 SearXNG<br/>Search Engine<br/>:4522"]
+    end
+
+    subgraph storage["Persistent Volumes"]
+        sqlite_vol[("📁 sqlite_data<br/>/app/db_data")]
+        chroma_vol[("📁 chroma_data<br/>/chroma")]
+        cache_vol[("📁 chroma_cache<br/>/app/chroma_cache")]
+    end
+
+    %% Service dependencies
+    ui -->|depends_on| api
+    api -->|depends_on| chromadb
+
+    %% Runtime connections
+    api -->|LLM inference<br/>HTTP POST /api/chat| ollama
+    api -->|Web search<br/>HTTP GET /search| searxng
+    api -->|Vector embeddings<br/>HTTP| chromadb
+
+    %% Volume mounts
+    api --- sqlite_vol
+    api --- cache_vol
+    chromadb --- chroma_vol
+    ui --- sqlite_vol
+
+    %% User access
+    user(("👤 User / Client")) -->|POST /api/ask<br/>GET /api/status| api
+    user -->|Browse UI| ui

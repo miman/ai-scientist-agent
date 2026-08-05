@@ -1,0 +1,132 @@
+"""
+Web search tool used by the Searcher node.
+If SEARXNG_URL is configured, queries the self-hosted SearXNG instance and scrapes page content.
+Otherwise, falls back to DuckDuckGo via LangChain's built-in tool (no API key required).
+"""
+
+import os
+import requests
+from bs4 import BeautifulSoup
+
+
+SEARXNG_URL = os.getenv("SEARXNG_URL", "").strip()
+
+
+def _search_searxng(query: str) -> str:
+    """Search using a self-hosted SearXNG instance and scrape results."""
+    query = query.strip('"').strip("'")
+    web_pages_extracted = []
+
+    try:
+        print(f"📡 [Tool: Search] Querying SearXNG at: {SEARXNG_URL} with query: '{query}'", flush=True)
+
+        endpoint = f"{SEARXNG_URL.rstrip('/')}/search"
+        params = {"q": query, "format": "json"}
+
+        response = requests.get(endpoint, params=params, timeout=15)
+        response.raise_for_status()
+        search_results = response.json().get("results", [])
+
+        print(f"🔍 [Tool: Search] Total results from SearXNG: {len(search_results)}", flush=True)
+
+        success_count = 0
+        for i, r in enumerate(search_results):
+            url = r.get("url")
+            title = r.get("title", "Untitled")
+            snippet_backup = r.get("content") or ""
+
+            if not url:
+                continue
+
+            print(f"🌐 [Scraper] Processing #{i+1} -> {url}", flush=True)
+
+            try:
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    ),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                }
+                page_response = requests.get(url, headers=headers, timeout=6)
+
+                if page_response.status_code == 200:
+                    soup = BeautifulSoup(page_response.text, "html.parser")
+                    for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
+                        element.extract()
+
+                    page_text = soup.get_text()
+                    clean_text = " ".join(page_text.split())
+                    trimmed_content = " ".join(clean_text.split()[:800])
+
+                    if len(trimmed_content.strip()) > 200:
+                        print(f"✅ [Scraper] Extracted {len(trimmed_content.split())} words from #{i+1}", flush=True)
+                        web_pages_extracted.append(
+                            f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n"
+                        )
+                        success_count += 1
+                        if success_count >= 3:
+                            print("🎯 Quota of 3 pages reached.", flush=True)
+                            break
+                        continue
+
+                print(f"⚠️ #{i+1} bad status ({page_response.status_code}). Using snippet.", flush=True)
+                clean_snippet = " ".join(snippet_backup.split())
+                web_pages_extracted.append(
+                    f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n"
+                )
+
+            except Exception as scrape_error:
+                print(f"⚠️ #{i+1} failed ({scrape_error}). Using snippet.", flush=True)
+                clean_snippet = " ".join(snippet_backup.split())
+                web_pages_extracted.append(
+                    f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n"
+                )
+
+            if success_count >= 3:
+                break
+
+        if web_pages_extracted:
+            return "\n\n---\n\n".join(web_pages_extracted)
+
+        print("⚠️ All search parameters resulted in empty datasets.", flush=True)
+        return "Web search returned no usable text content."
+
+    except Exception as e:
+        print(f"❌ Critical exception in SearXNG search: {str(e)}", flush=True)
+        return f"Web search tool execution failure: {str(e)}"
+
+
+def _search_duckduckgo(query: str) -> str:
+    """Search using DuckDuckGo via LangChain (no API key needed)."""
+    from langchain_community.tools import DuckDuckGoSearchResults
+
+    query = query.strip('"').strip("'")
+
+    try:
+        print(f"🦆 [Tool: Search] Querying DuckDuckGo with: '{query}'", flush=True)
+        search = DuckDuckGoSearchResults(num_results=5)
+        results = search.run(query)
+        print(f"✅ [Tool: Search] DuckDuckGo returned results.", flush=True)
+        return results
+    except Exception as e:
+        print(f"❌ Critical exception in DuckDuckGo search: {str(e)}", flush=True)
+        return f"Web search tool execution failure: {str(e)}"
+
+
+def tool_web_search(query: str) -> str:
+    """
+    Executes a web search query.
+    Uses SearXNG if SEARXNG_URL is configured, otherwise falls back to DuckDuckGo.
+
+    Args:
+        query: The search keywords generated by the Searcher agent.
+
+    Returns:
+        Search results as text content.
+    """
+    if SEARXNG_URL:
+        return _search_searxng(query)
+    else:
+        return _search_duckduckgo(query)

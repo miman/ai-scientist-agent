@@ -1,54 +1,130 @@
+"""
+FastAPI application that exposes the LangGraph multi-agent pipeline via REST endpoints.
+"""
+
 import os
 import sqlite3
 import threading
 import uuid
-import requests
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from typing import Optional
+
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
-from bs4 import BeautifulSoup
-from prompts.prompts import get_prompt
 
-app = FastAPI(title="AI Adaptive Multi-Agent Problem Solver API")
+from graph import build_graph
 
-base_model = os.getenv("BASE_MODEL", "hf.co/unsloth/gemma-4-12b-it-GGUF:UD-Q5_K_XL")
 
-# ==========================================
-# CONFIGURATION: AGENT MODELS
-# ==========================================
-MODEL_CONFIG = {
-    "searcher": base_model,
-    "processor": base_model,
-    "planner": base_model,
-    "expert": base_model,
-    "critic": base_model,
-    "sanitizer": base_model
-}
+app = FastAPI(title="AI Adaptive Multi-Agent Problem Solver API (LangGraph)")
 
-# ==========================================
-# 0. DATABASE INITIALIZATION
-# ==========================================
-DB_DIR = "/app/db_data"
+# ─── Database ───
+DB_DIR = os.getenv("DB_DIR", "/app/db_data")
 DB_PATH = os.path.join(DB_DIR, "agent_archive.db")
 
-# In-memory store for active runs: { task_id: { "prompt": "...", "status": "Running", "current_agent": "Searcher", "loop": 1, "logs": [...] } }
-LIVE_TRACKING = {}
+# In-memory tracking for active/completed runs
+LIVE_TRACKING: dict = {}
+
+
+def init_sqlite():
+    """Ensures the SQLite database and solutions table exist."""
+    if not os.path.exists(DB_DIR):
+        os.makedirs(DB_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS solutions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt TEXT,
+            solution TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+init_sqlite()
+
+# Compile the graph once at startup
+pipeline = build_graph()
+
+
+# ─── Pydantic schemas ───
+class QuestionRequest(BaseModel):
+    prompt: str
+    webhook_url: Optional[str] = None
+
+
+# ─── Background pipeline runner ───
+def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None):
+    """Runs the LangGraph pipeline in a background thread."""
+    task_id = str(uuid.uuid4())[:8]
+
+    LIVE_TRACKING[task_id] = {
+        "prompt": user_prompt,
+        "status": "In Progress",
+        "final_solution": None,
+    }
+
+    try:
+        # Initial state fed into the graph
+        initial_state = {
+            "prompt": user_prompt,
+            "webhook_url": webhook_url,
+            "specialty": "general",
+            "loop_count": 1,
+            "max_loops": 5,
+            "pipeline_history": [],
+            "research_log": [],
+            "raw_search_data": None,
+            "processed_facts": None,
+            "accumulated_context": "No external data collected yet.",
+            "blueprint": "",
+            "solution": "",
+            "approved": False,
+            "critic_feedback": "",
+            "final_solution": None,
+            "db_id": None,
+        }
+
+        # Execute the full graph — blocks until END is reached
+        final_state = pipeline.invoke(initial_state)
+
+        LIVE_TRACKING[task_id]["status"] = "Completed"
+        LIVE_TRACKING[task_id]["final_solution"] = final_state.get("final_solution")
+        LIVE_TRACKING[task_id]["db_id"] = final_state.get("db_id")
+
+    except Exception as e:
+        print(f"❌ Pipeline crashed: {e}", flush=True)
+        LIVE_TRACKING[task_id]["status"] = "Failed"
+        LIVE_TRACKING[task_id]["error"] = str(e)
+
+
+# ─── API Endpoints ───
+@app.post("/api/ask")
+def ask_question(request: QuestionRequest):
+    """Launches the multi-agent pipeline in a background thread."""
+    thread = threading.Thread(
+        target=run_pipeline_background,
+        args=(request.prompt, request.webhook_url),
+    )
+    thread.start()
+    return {
+        "status": "processing",
+        "message": "LangGraph pipeline launched in background.",
+    }
+
 
 @app.get("/api/status")
 def get_live_status():
-    """Returns all active or recently completed live runs."""
+    """Returns all active or recently completed runs."""
     return LIVE_TRACKING
+
 
 @app.get("/api/solutions")
 def get_all_solutions():
-    """
-    Exposes a FastAPI GET route to pull a lightweight list of all 
-    archived solutions out of SQLite storage for UI history listing.
-    """
+    """Lists all archived solutions (lightweight — no full payloads)."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        # We only pull ID, prompt, and timestamp so we don't load massive code payloads all at once
         cursor.execute("SELECT id, prompt, timestamp FROM solutions ORDER BY id DESC")
         rows = cursor.fetchall()
         solutions = [{"id": r[0], "prompt": r[1], "timestamp": r[2]} for r in rows]
@@ -59,557 +135,22 @@ def get_all_solutions():
         conn.close()
     return solutions
 
-def init_sqlite():
-    """
-    Initializes the persistent SQLite database and ensures the target directory exists.
-    Creates the 'solutions' table if it does not already exist in the database schema.
-
-    Returns:
-        None
-    """
-    if not os.path.exists(DB_DIR):
-        os.makedirs(DB_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS solutions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            prompt TEXT,
-            solution TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
-
-init_sqlite()
-
-# ==========================================
-# 1. PYDANTIC SCHEMAS
-# ==========================================
-class QuestionRequest(BaseModel):
-    prompt: str
-    webhook_url: Optional[str] = None
-
-# ==========================================
-# 2. AGENT LOGIC & IN-MEMORY TOOLS
-# ==========================================
-def tool_web_search(query: str) -> str:
-    """
-    Executes a web search query via a self-hosted SearXNG instance.
-    Scrapes full HTML content from successful page hits up to a predefined quota.
-
-    Args:
-        query (str): The search keywords generated by the Searcher agent.
-
-    Returns:
-        str: Concatenated text content from scraped pages, snippet fallbacks, 
-             or a default error state string.
-    """
-    query = query.strip('"').strip("'")
-    web_pages_extracted = []
-    
-    searxng_url = os.getenv("SEARXNG_URL", "http://192.168.68.100:4522")
-    
-    try:
-        print(f"📡 [Tool: Search] Querying self-hosted SearXNG instance at: {searxng_url} with query: '{query}'", flush=True)
-        
-        endpoint = f"{searxng_url.rstrip('/')}/search"
-        params = {
-            "q": query,
-            "format": "json"
-        }
-        
-        response = requests.get(endpoint, params=params, timeout=15)
-        response.raise_for_status()
-        search_results = response.json().get("results", [])
-        
-        print(f"🔍 [Tool: Search] Total available target links from SearXNG: {len(search_results)}", flush=True)
-        
-        success_count = 0
-        for i, r in enumerate(search_results):
-            url = r.get('url')
-            title = r.get('title', 'Untitled Destination')
-            snippet_backup = r.get('content') or ''
-            
-            if not url:
-                continue
-                
-            print(f"🌐 [Scraper] Processing Index Position #{i+1} Target Link -> {url}", flush=True)
-            
-            try:
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                }
-                page_response = requests.get(url, headers=headers, timeout=6)
-                
-                if page_response.status_code == 200:
-                    soup = BeautifulSoup(page_response.text, "html.parser")
-                    
-                    for element in soup(["script", "style", "nav", "footer", "header", "aside", "form"]):
-                        element.extract()
-                        
-                    page_text = soup.get_text()
-                    clean_text = " ".join(page_text.split())
-                    trimmed_content = " ".join(clean_text.split()[:800])
-                    
-                    if len(trimmed_content.strip()) > 200:
-                        print(f"✅ [Scraper] Successfully extracted {len(trimmed_content.split())} words of deep context from Link #{i+1}", flush=True)
-                        web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nFull-Content: {trimmed_content}\n")
-                        
-                        success_count += 1
-                        if success_count >= 3:
-                            print("🎯 Target quota of 3 deeply scraped pages satisfied. Breaking list loop.", flush=True)
-                            break
-                        continue
-                        
-                print(f"⚠️ Link #{i+1} returned bad status layout ({page_response.status_code}). Appending snippet backup and rolling to next link.", flush=True)
-                clean_snippet = " ".join(snippet_backup.split())
-                web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
-                
-            except Exception as scrape_error:
-                print(f"⚠️ Connection failure on Link #{i+1} ({scrape_error}). Appending snippet backup and rolling to next link.", flush=True)
-                clean_snippet = " ".join(snippet_backup.split())
-                web_pages_extracted.append(f"Source Link: {url}\nTitle: {title}\nSnippet-Only: {clean_snippet}\n")
-                
-            if success_count >= 3:
-                break
-
-        if web_pages_extracted:
-            return "\n\n---\n\n".join(web_pages_extracted)
-            
-        print("⚠️ All search parameters resulted in empty datasets.", flush=True)
-        return "Factual context check: Searching for real-time market data returned no active text snippets. Target valuation analysis using standard fundamental metrics."
-            
-    except Exception as e:
-        print(f"❌ Critical Exception caught inside tool_web_search module layer: {str(e)}", flush=True)
-        return f"Web search tool execution failure: {str(e)}"
-
-def call_llm(system_prompt: str, user_content: str, model_name: str) -> str:
-    """
-    Submits an HTTP POST request to the local Ollama chat API endpoint.
-    Forces zero-temperature generations to maximize reproducibility and constraint adherence.
-
-    Args:
-        system_prompt (str): Instructions establishing the operational persona constraints.
-        user_content (str): Inbound dynamic payload data/context matching the agent state.
-        model_name (str): Exact identifier string of the local LLM model deployment tag.
-
-    Returns:
-        str: Raw generation response text string from the model, or an internal error string.
-    """
-    ollama_url = os.getenv("OLLAMA_URL", "http://192.168.68.100:11434")
-    
-    payload = {
-        "model": model_name,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content}
-        ],
-        "stream": False,
-        "options": {"temperature": 0.0}, 
-        "keep_alive": "30m"
-    }
-    try:
-        endpoint = f"{ollama_url.rstrip('/')}/api/chat"
-        response = requests.post(endpoint, json=payload, timeout=300)
-        response.raise_for_status()
-        return response.json()["message"]["content"]
-    except Exception as e:
-        print(f"⚠️ Error calling Ollama ({model_name}): {e}", flush=True)
-        return f"Internal generation pipeline error/timeout: {str(e)}"
-
-def agent_router(original_prompt: str) -> str:
-    """
-    Analyzes the initial user query to identify and isolate its underlying intent domain.
-    Dynamically assigns a system classification token to tailor downstream prompt templates.
-
-    Args:
-        original_prompt (str): The raw text submission coming from the user request.
-
-    Returns:
-        str: A lowcase domain specialization token ('code', 'finance', 'medical', 'general').
-    """
-    print(f"🎯 [Orchestrator Router] Analyzing query and selecting domain specialty...", flush=True)
-    system_prompt = (
-        "You are an expert dispatcher router.\n"
-        "Analyze the user query and classify it into EXACTLY one of these specialties:\n"
-        "- code (For software development, scripting, debugging, logic design, databases, configuration files)\n"
-        "- finance (For stock analysis, wealth, metrics, accounting, valuation, market economics)\n"
-        "- medical (For health, medicine, biological sciences, drug interactions)\n"
-        "- general (For any other topics, reasoning, or general queries)\n\n"
-        "Output ONLY the single classification word (e.g. 'code' or 'finance' or 'medical' or 'general'). Do not write any other text."
-    )
-    classification = call_llm(system_prompt, original_prompt, model_name=MODEL_CONFIG["planner"])
-    specialty = classification.strip().lower()
-    
-    # Safe validation fallback
-    valid_specialties = ["code", "finance", "medical", "general"]
-    for s in valid_specialties:
-        if s in specialty:
-            print(f"🎯 [Orchestrator Router] Routed to specialty: '{s}'", flush=True)
-            return s
-            
-    print("🎯 [Orchestrator Router] Routing fallback triggered: 'general'", flush=True)
-    return "general"
-
-def agent_searcher(prompt: str, history_context: str = "", specialty: str = "general") -> Optional[str]:
-    """
-    Triage agent deciding whether external web information is required to answer the query.
-    Takes loop histories into account to refine or broaden the targeted query parameters.
-
-    Args:
-        prompt (str): The primary user query.
-        history_context (str, optional): Rejection feedback transcripts from previous cycles.
-        specialty (str): The active classification domain token.
-
-    Returns:
-        Optional[str]: Scraped web context string if search is requested, otherwise None.
-    """
-    print(f"🕵️‍♂️ [Agent 1: Searcher] Assessing if web search or supplementary data is needed...", flush=True)
-    
-    system_prompt = get_prompt("searcher", specialty=specialty)
-    
-    user_content = f"TARGET REQUEST:\n{prompt}"
-    if history_context:
-        user_content += f"\n\nPAST EXECUTION HISTORY:\n{history_context}"
-        
-    raw_decision = call_llm(system_prompt, user_content, model_name=MODEL_CONFIG["searcher"]).strip()
-    
-    if "DECISION: NO" in raw_decision or raw_decision.strip().upper() == "NO":
-        print("💡 [Agent 1: Searcher] Decision: No new web search required.", flush=True)
-        return None
-        
-    if "SEARCH_QUERY:" in raw_decision:
-        search_query = raw_decision.split("SEARCH_QUERY:")[-1].strip().strip('"').strip("'")
-        if search_query:
-            print(f"🌐 [Agent 1: Searcher] Target query generated: '{search_query}'", flush=True)
-            return tool_web_search(search_query)
-            
-    fallback_query = raw_decision.replace("DECISION: YES", "").replace("|", "").replace("DECISION:", "").strip().strip('"').strip("'")
-    if fallback_query and len(fallback_query) > 1:
-        print(f"🌐 [Agent 1: Searcher] Executing fallback string parameters: '{fallback_query}'", flush=True)
-        return tool_web_search(fallback_query)
-        
-    print("⚠️ [Agent 1: Searcher] Search parsing format variant caught. Running query fallback directly.", flush=True)
-    return tool_web_search(prompt)
-
-def agent_processor(raw_data: str, specialty: str = "general") -> str:
-    """
-    Extraction assistant that reads unstructured scraped web strings.
-    Isolates core parameters, statistical numbers, dates, and strict factual elements.
-
-    Args:
-        raw_data (str): Unstructured HTML extraction block returned by the search tool.
-        specialty (str): The active classification domain token.
-
-    Returns:
-        str: Condensation containing an itemized factual bulleted list under 250 words.
-    """
-    print(f"🧹 [Agent 2: Processor] Condensing newly discovered web items...", flush=True)
-    system_prompt = get_prompt("processor", specialty=specialty)
-    processed_output = call_llm(
-        system_prompt, 
-        raw_data, 
-        model_name=MODEL_CONFIG["processor"]
-    )
-    print(f"\n[=== PROCESSOR CONDENSED FACTS ===]", flush=True)
-    print(processed_output, flush=True)
-    print(f"[==================================]\n", flush=True)
-    return processed_output
-
-def agent_planner(original_prompt: str, accumulated_context: str, specialty: str = "general") -> str:
-    """
-    Architectural planner formulating a structured implementation blueprint.
-    Transforms raw user criteria and search results into distinct sequential milestones.
-
-    Args:
-        original_prompt (str): The core problem statement requested by the client.
-        accumulated_context (str): The compressed database/web factual constraints collected.
-        specialty (str): The active classification domain token.
-
-    Returns:
-        str: A clean markdown task sequence guiding the downstream execution step.
-    """
-    print(f"📋 [Agent 2.5: Planner] Engineering strategic blueprint layout...", flush=True)
-    system_prompt = get_prompt("planner", specialty=specialty)
-    user_content = f"COMPLETE ACCUMULATED KNOWLEDGE:\n{accumulated_context}\n\nORIGINAL REQUEST TARGETS:\n{original_prompt}"
-    blueprint_output = call_llm(system_prompt, user_content, model_name=MODEL_CONFIG["planner"])
-    
-    print(f"\n[=== PLANNER SOLUTION BLUEPRINT ===]", flush=True)
-    print(blueprint_output, flush=True)
-    print(f"[===================================]\n", flush=True)
-    
-    return blueprint_output
-
-def agent_expert(original_prompt: str, blueprint: str, accumulated_context: str, specialty: str = "general") -> str:
-    """
-    Subject matter implementation agent that generates production-grade outputs.
-    Strictly grounds structural logic inside the provided blueprint and context.
-
-    Args:
-        original_prompt (str): The baseline requirement problem text.
-        blueprint (str): Guidelines received from the Planner agent layer.
-        accumulated_context (str): Factual constraints extracted from background analysis.
-        specialty (str): The active classification domain token.
-
-    Returns:
-        str: The fully articulated engineering code asset or comprehensive report document.
-    """
-    print(f"🧠 [Agent 3: Expert] Assembling comprehensive solution matrix...", flush=True)
-    
-#    print(f"\n[=== RESEARCH SEARCH EXTRACT SENT TO EXPERT ===]", flush=True)
-#    print(accumulated_context, flush=True)
-#    print(f"[==============================================]\n", flush=True)
-    
-    system_prompt = get_prompt("expert", specialty=specialty)
-    user_content = f"ACCUMULATED KNOWLEDGE LOG:\n{accumulated_context}\n\nBLUEPRINT MATRIX:\n{blueprint}\n\nTARGET USER PROMPT:\n{original_prompt}"
-    expert_solution = call_llm(system_prompt, user_content, model_name=MODEL_CONFIG["expert"])
-    
-    print(f"\n[=== EXPERT GENERATED SOLUTION ===]", flush=True)
-    print(expert_solution, flush=True)
-    print(f"[==================================]\n", flush=True)
-    
-    return expert_solution
-
-def agent_critic(original_prompt: str, solution: str, loop_count: int, specialty: str = "general") -> tuple[bool, str]:
-    """
-    Quality control auditor performing strict analytical verification on solutions.
-    Explicitly scans for structural bugs, placeholders, or missing data constraints.
-
-    Args:
-        original_prompt (str): Baseline criteria the final asset must satisfy.
-        solution (str): The artifact draft created during the current expert cycle.
-        loop_count (int): Index keeping track of the reflection loop pipeline run count.
-        specialty (str): The active classification domain token.
-
-    Returns:
-        tuple[bool, str]: A pair containing the boolean validation verdict state (True/False)
-                          along with the detailed audit critique explanation.
-    """
-    print(f"⚖️ [Agent 4: Critic] Auditing structural composition (Attempt {loop_count})...", flush=True)
-    system_prompt = get_prompt("critic", specialty=specialty)
-    user_content = f"ORIGINAL USER TARGET:\n{original_prompt}\n\nPROPOSED SOLUTION STRATEGEMS:\n{solution}"
-    review_result = call_llm(system_prompt, user_content, model_name=MODEL_CONFIG["critic"])
-    
-    print(f"\n================ CRITIC AUDIT RECONNAISSANCE (Loop {loop_count}) ================", flush=True)
-    print(review_result, flush=True)
-    print("====================================================================\n", flush=True)
-    
-    if "APPROVED" in review_result.upper() and "REJECTED" not in review_result.upper():
-        return True, review_result
-    return False, review_result
-
-def agent_sanitizer(raw_solution: str, specialty: str = "general") -> str:
-    """
-    Refining text editor that cleans up conversational remnants from the finalized output.
-    Erases meta-commentary, introductory pleasantries, and internal engine flags.
-
-    Args:
-        raw_solution (str): The verified text or code approved by the Critic agent.
-        specialty (str): The active classification domain token.
-
-    Returns:
-        str: Pure production markdown layout containing exclusively functional content.
-    """
-    print("✨ [Agent 4.5: Sanitizer] Extracting pristine technical content...", flush=True)
-    system_prompt = get_prompt("sanitizer", specialty=specialty)
-    return call_llm(system_prompt, raw_solution, model_name=MODEL_CONFIG["sanitizer"])
-
-def agent_archiver(original_prompt: str, final_solution: str) -> int:
-    """
-    Saves the completely processed solution asset into local persistent storage.
-
-    Args:
-        original_prompt (str): The original user problem statement.
-        final_solution (str): Cleaned, sanitized, production-ready solution block.
-
-    Returns:
-        int: The unique primary key identifier row ID integer matching the saved item.
-    """
-    print("🗄️ [Agent 5: Archive] Committing polished artifact to persistent storage...", flush=True)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO solutions (prompt, solution) VALUES (?, ?)", (original_prompt, final_solution))
-    inserted_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
-    return inserted_id
-
-# ==========================================
-# 3. CORE ORCHESTRATION PIPELINE
-# ==========================================
-def run_agent_pipeline_background(user_problem: str, webhook_url: Optional[str] = None):
-    task_id = str(uuid.uuid4())[:8]
-    
-    # Initialize rich tracking architecture
-    LIVE_TRACKING[task_id] = {
-        "prompt": user_problem,
-        "status": "In Progress",
-        "current_agent": "Router",
-        "loop": 1,
-        "final_solution": None,
-        "agent_steps": []  # Will hold dicts of each agent's deep telemetry
-    }
-
-    try:
-        # --- ROUTER ---
-        specialty = agent_router(user_problem)
-        LIVE_TRACKING[task_id]["agent_steps"].append({
-            "agent": "Orchestrator Router",
-            "input": f"User Problem: {user_problem}",
-            "action": "Classifying domain intent using planner LLM template.",
-            "output": f"Routed to specialty: {specialty.upper()}"
-        })
-        
-        loop_count = 1
-        research_log = []
-        pipeline_history = []
-        
-        while True:
-            history_context = "\n\n".join(pipeline_history)
-            LIVE_TRACKING[task_id]["loop"] = loop_count
-            
-            # --- SEARCHER ---
-            LIVE_TRACKING[task_id]["current_agent"] = "Searcher"
-            raw_info = agent_searcher(user_problem, history_context=history_context, specialty=specialty)
-            
-            LIVE_TRACKING[task_id]["agent_steps"].append({
-                "agent": f"Searcher (Loop {loop_count})",
-                "input": f"Prompt: {user_problem}\nHistory Context: {history_context}",
-                "action": "Deciding if web query is needed and invoking SearXNG infrastructure.",
-                "output": raw_info if raw_info else "Decision: No external web search required."
-            })
-            
-            # --- PROCESSOR ---
-            if raw_info:
-                LIVE_TRACKING[task_id]["current_agent"] = "Processor"
-                fresh_facts = agent_processor(raw_info, specialty=specialty)
-                
-                LIVE_TRACKING[task_id]["agent_steps"].append({
-                    "agent": f"Processor (Loop {loop_count})",
-                    "input": f"Raw Web Data: {raw_info[:500]}...",
-                    "action": "Stripping HTML noise, markdown layouts, and parsing core entities.",
-                    "output": fresh_facts
-                })
-                if fresh_facts.strip() and "error" not in fresh_facts.lower():
-                    research_log.append(fresh_facts)
-            
-            accumulated_context = "\n---\n".join(research_log) if research_log else "No external web data logged yet."
-            
-            # --- PLANNER ---
-            LIVE_TRACKING[task_id]["current_agent"] = "Planner"
-            blueprint = agent_planner(user_problem, accumulated_context, specialty=specialty)
-            if history_context:
-                blueprint += f"\n\nCRITICAL ISSUES TO CORRECT FROM PREVIOUS ATTEMPTS:\n{history_context}"
-                
-            LIVE_TRACKING[task_id]["agent_steps"].append({
-                "agent": f"Planner (Loop {loop_count})",
-                "input": f"Accumulated Context:\n{accumulated_context}\n\nUser Problem: {user_problem}",
-                "action": "Engineering a structured sequential execution plan blueprint.",
-                "output": blueprint
-            })
-            
-            # --- EXPERT ---
-            LIVE_TRACKING[task_id]["current_agent"] = "Expert"
-            solution = agent_expert(user_problem, blueprint, accumulated_context, specialty=specialty)
-            
-            LIVE_TRACKING[task_id]["agent_steps"].append({
-                "agent": f"Expert (Loop {loop_count})",
-                "input": f"Blueprint:\n{blueprint}\n\nContext:\n{accumulated_context}",
-                "action": "Generating production code or technical documentation asset blocks.",
-                "output": solution
-            })
-            
-            # --- CRITIC ---
-            LIVE_TRACKING[task_id]["current_agent"] = "Critic"
-            approved, feedback = agent_critic(user_problem, solution, loop_count, specialty=specialty)
-            
-            LIVE_TRACKING[task_id]["agent_steps"].append({
-                "agent": f"Critic (Loop {loop_count})",
-                "input": f"Proposed Solution:\n{solution[:500]}...",
-                "action": "Performing static code review and vulnerability scanning against checklist.",
-                "output": f"Approved: {approved}\n\nFeedback:\n{feedback}"
-            })
-            
-            if approved or loop_count >= 5:
-                # --- SANITIZER ---
-                LIVE_TRACKING[task_id]["current_agent"] = "Sanitizer"
-                polished_solution = agent_sanitizer(solution, specialty=specialty)
-                
-                LIVE_TRACKING[task_id]["agent_steps"].append({
-                    "agent": "Sanitizer",
-                    "input": f"Raw Approved Solution:\n{solution[:500]}...",
-                    "action": "Removing conversational meta-commentary and markdown leftovers.",
-                    "output": polished_solution
-                })
-                
-                db_id = agent_archiver(user_problem, polished_solution)
-                
-                LIVE_TRACKING[task_id]["status"] = "Completed"
-                LIVE_TRACKING[task_id]["current_agent"] = "Done"
-                LIVE_TRACKING[task_id]["final_solution"] = polished_solution
-                break
-            else:
-                pipeline_history.append(f"Attempt {loop_count} Rejected.\nCritic Reasonings:\n{feedback}")
-                loop_count += 1
-                
-    except Exception as e:
-        LIVE_TRACKING[task_id]["status"] = "Failed"
-        LIVE_TRACKING[task_id]["agent_steps"].append({
-            "agent": "Crash Reporter",
-            "input": "Pipeline Context",
-            "action": "Catching fatal background thread exception.",
-            "output": f"Critical Error: {str(e)}"
-        })
-
-# ==========================================
-# 4. REST API ENDPOINTS
-# ==========================================
-@app.post("/api/ask")
-def ask_question(request: QuestionRequest):
-    """
-    Exposes a FastAPI POST route to launch the multi-agent problem solver.
-    Delegates the processing workload immediately onto an independent background thread execution layer.
-
-    Args:
-        request (QuestionRequest): Pydantic validation structure storing the raw prompt and webhook.
-
-    Returns:
-        dict: A processing status indicator packet tracking initialization success.
-    """
-    thread = threading.Thread(
-        target=run_agent_pipeline_background, 
-        args=(request.prompt, request.webhook_url)
-    )
-    thread.start()
-    return {
-        "status": "processing",
-        "message": "The adaptive loop pipeline has successfully launched in a background thread context."
-    }
 
 @app.get("/api/solutions/{solution_id}")
 def get_solution(solution_id: int):
-    """
-    Exposes a FastAPI GET route to pull archived solution payloads out of SQLite storage.
-
-    Args:
-        solution_id (int): Database record entry key.
-
-    Returns:
-        dict: A packet containing record meta configurations and the sanitized markdown solution.
-
-    Raises:
-        HTTPException: Status 404 if the requested row identifier index cannot be located.
-    """
+    """Fetches a single archived solution by ID."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, prompt, solution, timestamp FROM solutions WHERE id = ?", (solution_id,))
+    cursor.execute(
+        "SELECT id, prompt, solution, timestamp FROM solutions WHERE id = ?",
+        (solution_id,),
+    )
     row = cursor.fetchone()
     conn.close()
-    if not row: raise HTTPException(status_code=404, detail="Archive index entry target not found.")
+    if not row:
+        raise HTTPException(status_code=404, detail="Solution not found.")
     return {"id": row[0], "prompt": row[1], "solution": row[2], "timestamp": row[3]}
+
 
 if __name__ == "__main__":
     import uvicorn

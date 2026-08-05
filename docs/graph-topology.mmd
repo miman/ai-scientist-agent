@@ -1,0 +1,30 @@
+graph TD
+    START([START]) --> router
+
+    router[🎯 Router<br/>Classify domain specialty]
+    router --> searcher
+
+    searcher[🕵️ Searcher<br/>Decide if web search needed]
+    searcher --> processor
+
+    processor[🧹 Processor<br/>Extract structured facts]
+    processor --> planner
+
+    planner[📋 Planner<br/>Build execution blueprint]
+    planner --> expert
+
+    expert[🧠 Expert<br/>Generate solution]
+    expert --> critic
+
+    critic[⚖️ Critic<br/>Audit & verdict]
+    critic -->|APPROVED or max loops| sanitizer
+    critic -->|REJECTED| increment_loop
+
+    increment_loop[🔄 Increment Loop<br/>Append feedback & bump counter]
+    increment_loop --> searcher
+
+    sanitizer[✨ Sanitizer<br/>Clean output]
+    sanitizer --> archiver
+
+    archiver[🗄️ Archiver<br/>Save to SQLite]
+    archiver --> END([END])
