@@ -13,6 +13,7 @@ class PipelineState(TypedDict):
     # --- Inputs ---
     prompt: str
     webhook_url: Optional[str]
+    pipeline_type: str  # "research" (default standard) or "dev_team"
 
     # --- Router output ---
     specialty: str
@@ -23,14 +24,22 @@ class PipelineState(TypedDict):
     pipeline_history: list[str]
     research_log: list[str]
 
-    # --- Intermediate artifacts ---
+    # --- Intermediate artifacts (Standard Pipeline) ---
     raw_search_data: Optional[str]
     processed_facts: Optional[str]
     accumulated_context: str
     blueprint: str
     solution: str
 
-    # --- Critic output ---
+    # --- Intermediate artifacts (Dev Team Pipeline) ---
+    architecture: str
+    backend_logic: str
+    frontend_code: str
+    qa_feedback: str
+    tester_feedback: str
+    docker_logs: str
+
+    # --- Critic / QA / Tester output ---
     approved: bool
     critic_feedback: str
 

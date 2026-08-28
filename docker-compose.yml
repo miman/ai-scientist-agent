@@ -2,6 +2,9 @@ version: '3.8'
 
 services:
   hermes_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: localhost/ai-scientist_hermes_api:latest
     container_name: ai_scientist_agents
     ports:
@@ -10,14 +13,16 @@ services:
       - CHROMA_HOST=chromadb
       - OLLAMA_URL=${OLLAMA_URL}
       - SEARXNG_URL=${SEARXNG_URL}
-      - HF_HOME=/app/chroma_cache  # <-- Tvingar ONNX/HuggingFace att använda denna mapp
+      - HF_HOME=/app/chroma_cache
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "host.containers.internal:host-gateway"
     volumes:
       - .:/app
       - sqlite_data:/app/db_data
-      - chroma_cache:/app/chroma_cache  # <-- Ändrad från /root/.cache till /app/chroma_cache
+      - chroma_cache:/app/chroma_cache
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
     depends_on:
       - chromadb
     networks:
@@ -34,13 +39,18 @@ services:
       - hermes-net
 
   hermes_ui:
-    image: localhost/ai-scientist_hermes_api:latest # Reuse the same built image
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: localhost/ai-scientist_hermes_api:latest
     container_name: ai_scientist_ui
     ports:
       - "8501:8501"
     volumes:
       - .:/app
       - sqlite_data:/app/db_data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker
     environment:
       - OLLAMA_URL=${OLLAMA_URL}
     command: streamlit run ui.py --server.port=8501 --server.address=0.0.0.0

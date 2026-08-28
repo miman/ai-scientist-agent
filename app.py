@@ -51,20 +51,31 @@ pipeline = build_graph()
 class QuestionRequest(BaseModel):
     prompt: str
     webhook_url: Optional[str] = None
+    pipeline_type: Optional[str] = "research"  # "research" or "dev_team"
 
 
 # ─── Background pipeline runner ───
-def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None):
+def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None, pipeline_type: str = "research"):
     """Runs the LangGraph pipeline in a background thread."""
     task_id = str(uuid.uuid4())[:8]
 
+    # Clean up previous runs when a new job starts
+    LIVE_TRACKING.clear()
+
     LIVE_TRACKING[task_id] = {
         "prompt": user_prompt,
+        "pipeline_type": pipeline_type,
         "status": "In Progress",
         "current_agent": "Initializing",
-        "specialty": "general",
+        "specialty": "code" if pipeline_type == "dev_team" else "general",
         "loop_count": 1,
         "blueprint": "",
+        "architecture": "",
+        "backend_logic": "",
+        "frontend_code": "",
+        "qa_feedback": "",
+        "tester_feedback": "",
+        "docker_logs": "",
         "solution": "",
         "critic_feedback": "",
         "agent_steps": [],
@@ -76,7 +87,8 @@ def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None)
         initial_state = {
             "prompt": user_prompt,
             "webhook_url": webhook_url,
-            "specialty": "general",
+            "pipeline_type": pipeline_type,
+            "specialty": "code" if pipeline_type == "dev_team" else "general",
             "loop_count": 1,
             "max_loops": 5,
             "pipeline_history": [],
@@ -85,6 +97,12 @@ def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None)
             "processed_facts": None,
             "accumulated_context": "No external data collected yet.",
             "blueprint": "",
+            "architecture": "",
+            "backend_logic": "",
+            "frontend_code": "",
+            "qa_feedback": "",
+            "tester_feedback": "",
+            "docker_logs": "",
             "solution": "",
             "approved": False,
             "critic_feedback": "",
@@ -98,19 +116,27 @@ def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None)
             for node_name, state_update in chunk.items():
                 LIVE_TRACKING[task_id]["current_agent"] = node_name
                 
+                # Extract main artifact string from state update dict
+                artifact_content = ""
+                if isinstance(state_update, dict):
+                    for key in ["architecture", "backend_logic", "frontend_code", "qa_feedback", "tester_feedback", "docker_logs", "solution", "blueprint", "processed_facts", "final_solution"]:
+                        if key in state_update and state_update[key]:
+                            artifact_content = str(state_update[key])
+                            break
+
                 # Store agent step details
                 step_record = {
                     "agent": node_name,
-                    "input": f"Loop {final_state.get('loop_count', 1)} | Specialty: {final_state.get('specialty', 'general')}",
+                    "input": f"Loop {final_state.get('loop_count', 1)} | Pipeline: {pipeline_type}",
                     "action": f"Executed LangGraph node '{node_name}'",
-                    "output": str(state_update),
+                    "output": artifact_content or str(state_update),
                 }
                 LIVE_TRACKING[task_id]["agent_steps"].append(step_record)
 
                 # Merge updates into final_state and LIVE_TRACKING telemetry
                 if isinstance(state_update, dict):
                     final_state.update(state_update)
-                    for key in ["specialty", "loop_count", "blueprint", "solution", "critic_feedback", "final_solution", "db_id"]:
+                    for key in ["specialty", "loop_count", "blueprint", "architecture", "backend_logic", "frontend_code", "qa_feedback", "tester_feedback", "docker_logs", "solution", "critic_feedback", "final_solution", "db_id"]:
                         if key in state_update:
                             LIVE_TRACKING[task_id][key] = state_update[key]
 
@@ -129,14 +155,16 @@ def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None)
 @app.post("/api/ask")
 def ask_question(request: QuestionRequest):
     """Launches the multi-agent pipeline in a background thread."""
+    pipe_type = request.pipeline_type if request.pipeline_type in ["research", "dev_team"] else "research"
     thread = threading.Thread(
         target=run_pipeline_background,
-        args=(request.prompt, request.webhook_url),
+        args=(request.prompt, request.webhook_url, pipe_type),
     )
     thread.start()
     return {
         "status": "processing",
-        "message": "LangGraph pipeline launched in background.",
+        "pipeline_type": pipe_type,
+        "message": f"LangGraph ({pipe_type}) pipeline launched in background.",
     }
 
 
@@ -148,37 +176,30 @@ def get_live_status():
 
 @app.get("/api/solutions")
 def get_all_solutions():
-    """Lists all archived solutions (lightweight — no full payloads)."""
+    """Returns a list of all historical solutions from SQLite."""
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT id, prompt, timestamp FROM solutions ORDER BY id DESC")
-        rows = cursor.fetchall()
-        solutions = [{"id": r[0], "prompt": r[1], "timestamp": r[2]} for r in rows]
-    except Exception as e:
-        solutions = []
-        print(f"⚠️ Error fetching history: {e}", flush=True)
-    finally:
-        conn.close()
-    return solutions
+    cursor.execute("SELECT id, prompt, timestamp FROM solutions ORDER BY id DESC")
+    rows = [dict(r) for r in cursor.fetchall()]
+    conn.close()
+    return rows
 
 
 @app.get("/api/solutions/{solution_id}")
-def get_solution(solution_id: int):
-    """Fetches a single archived solution by ID."""
+def get_solution_by_id(solution_id: int):
+    """Returns a single solution record by ID."""
     conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT id, prompt, solution, timestamp FROM solutions WHERE id = ?",
-        (solution_id,),
-    )
+    cursor.execute("SELECT * FROM solutions WHERE id = ?", (solution_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         raise HTTPException(status_code=404, detail="Solution not found.")
-    return {"id": row[0], "prompt": row[1], "solution": row[2], "timestamp": row[3]}
+    return dict(row)
 
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8500)
+    uvicorn.run("app:app", host="0.0.0.0", port=8500, reload=False)

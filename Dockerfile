@@ -4,12 +4,13 @@ FROM docker.io/library/python:3.11-slim
 # Sätt arbetskatalogen inuti containern
 WORKDIR /app
 
-# Installera systemberoenden som kan behövas för vissa Python-paket (t.ex. gcc för sqlite/chroma)
+# Installera systemberoenden inkl. docker CLI för container isolation & testning
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
-    && rm -rf /lib/apt/lists/*
+    docker.io \
+    && rm -rf /var/lib/apt/lists/*
 
-# Kopiera först requirements.txt för att utnyttja Podmans byggcache optimalt
+# Kopiera först requirements.txt för att utnyttja Podmans/Dockers byggcache optimalt
 COPY requirements.txt .
 
 # Installera alla Python-paket från requirements.txt

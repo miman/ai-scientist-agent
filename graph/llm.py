@@ -18,6 +18,11 @@ MODEL_CONFIG = {
     "expert": os.getenv("MODEL_EXPERT", BASE_MODEL),
     "critic": os.getenv("MODEL_CRITIC", BASE_MODEL),
     "sanitizer": os.getenv("MODEL_SANITIZER", BASE_MODEL),
+    "dev_architect": os.getenv("MODEL_DEV_ARCHITECT", BASE_MODEL),
+    "dev_backend": os.getenv("MODEL_DEV_BACKEND", BASE_MODEL),
+    "dev_frontend": os.getenv("MODEL_DEV_FRONTEND", BASE_MODEL),
+    "dev_qa": os.getenv("MODEL_DEV_QA", BASE_MODEL),
+    "dev_tester": os.getenv("MODEL_DEV_TESTER", BASE_MODEL),
 }
 
 

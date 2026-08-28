@@ -9,7 +9,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 
 from graph.state import PipelineState
 from graph.llm import get_llm
-from graph.tools import tool_web_search
+from graph.tools import tool_web_search, tool_run_in_docker
 from prompts.prompts import get_prompt
 
 
@@ -196,6 +196,172 @@ def critic_node(state: PipelineState) -> dict:
 
 
 # ─────────────────────────────────────────────
+# DEV TEAM NODES
+# ─────────────────────────────────────────────
+
+def dev_architect_node(state: PipelineState) -> dict:
+    """Architect node: Creates/refines system architecture."""
+    loop = state["loop_count"]
+    print(f"🏛️ [Architect] Designing system architecture (Loop {loop})...", flush=True)
+
+    system_prompt = get_prompt("dev_architect", specialty=state["specialty"])
+    
+    user_content = f"USER REQUEST:\n{state['prompt']}"
+    if state.get("accumulated_context") and state["accumulated_context"] != "No external data collected yet.":
+        user_content += f"\n\nRESEARCH CONTEXT:\n{state['accumulated_context']}"
+    
+    if state.get("architecture"):
+        user_content += f"\n\nPREVIOUS ARCHITECTURE:\n{state['architecture']}"
+
+    history_context = "\n\n".join(state["pipeline_history"])
+    if history_context:
+        user_content += f"\n\nISSUES & FEEDBACK TO RESOLVE IN ARCHITECTURE:\n{history_context}"
+
+    architecture = _invoke_llm("dev_architect", system_prompt, user_content)
+    print(f"\n[=== ARCHITECTURE SPECIFICATION ===]\n{architecture}\n[==================================]\n", flush=True)
+    return {"architecture": architecture}
+
+
+def dev_backend_node(state: PipelineState) -> dict:
+    """Backend Developer node: Implements backend logic using architecture."""
+    loop = state["loop_count"]
+    print(f"⚙️ [Backend Dev] Writing backend logic (Loop {loop})...", flush=True)
+
+    system_prompt = get_prompt("dev_backend", specialty=state["specialty"])
+
+    user_content = (
+        f"USER REQUEST:\n{state['prompt']}\n\n"
+        f"ARCHITECTURE SPECIFICATION:\n{state['architecture']}"
+    )
+
+    if state.get("qa_feedback"):
+        user_content += f"\n\nQA FEEDBACK TO FIX:\n{state['qa_feedback']}"
+
+    if state.get("tester_feedback"):
+        user_content += f"\n\nTESTER FEEDBACK TO FIX:\n{state['tester_feedback']}"
+
+    history_context = "\n\n".join(state["pipeline_history"])
+    if history_context:
+        user_content += f"\n\nREPAIR HISTORY:\n{history_context}"
+
+    backend_logic = _invoke_llm("dev_backend", system_prompt, user_content)
+    print(f"\n[=== BACKEND LOGIC ===]\n{backend_logic}\n[=====================]\n", flush=True)
+
+    combined_solution = f"### Architecture\n{state['architecture']}\n\n### Backend Logic\n{backend_logic}"
+    return {"backend_logic": backend_logic, "solution": combined_solution}
+
+
+def dev_frontend_node(state: PipelineState) -> dict:
+    """Frontend Developer node: Implements UI using backend logic and architecture."""
+    loop = state["loop_count"]
+    print(f"🎨 [Frontend Dev] Writing frontend UI (Loop {loop})...", flush=True)
+
+    system_prompt = get_prompt("dev_frontend", specialty=state["specialty"])
+
+    user_content = (
+        f"USER REQUEST:\n{state['prompt']}\n\n"
+        f"ARCHITECTURE SPECIFICATION:\n{state['architecture']}\n\n"
+        f"BACKEND LOGIC & APIs:\n{state['backend_logic']}"
+    )
+
+    history_context = "\n\n".join(state["pipeline_history"])
+    if history_context:
+        user_content += f"\n\nREPAIR HISTORY:\n{history_context}"
+
+    frontend_code = _invoke_llm("dev_frontend", system_prompt, user_content)
+    print(f"\n[=== FRONTEND CODE ===]\n{frontend_code}\n[=====================]\n", flush=True)
+
+    combined_solution = (
+        f"### Architecture\n{state['architecture']}\n\n"
+        f"### Backend Logic\n{state['backend_logic']}\n\n"
+        f"### Frontend UI\n{frontend_code}"
+    )
+    return {"frontend_code": frontend_code, "solution": combined_solution}
+
+
+def dev_qa_node(state: PipelineState) -> dict:
+    """QA Engineer node: Validates full solution against requirements."""
+    loop = state["loop_count"]
+    print(f"🔍 [QA Engineer] Validating code & functional requirements (Loop {loop})...", flush=True)
+
+    system_prompt = get_prompt("dev_qa", specialty=state["specialty"])
+
+    user_content = (
+        f"ORIGINAL USER REQUEST:\n{state['prompt']}\n\n"
+        f"ARCHITECTURE:\n{state['architecture']}\n\n"
+        f"BACKEND LOGIC:\n{state['backend_logic']}\n\n"
+        f"FRONTEND CODE:\n{state['frontend_code']}"
+    )
+
+    qa_review = _invoke_llm("dev_qa", system_prompt, user_content)
+    print(f"\n[=== QA REVIEW (Loop {loop}) ===]\n{qa_review}\n[==============================]\n", flush=True)
+
+    approved = "APPROVED" in qa_review.upper() and "REJECTED" not in qa_review.upper()
+    return {"approved": approved, "qa_feedback": qa_review, "critic_feedback": qa_review}
+
+
+def dev_tester_node(state: PipelineState) -> dict:
+    """
+    Tester node: Builds, deploys, runs the generated code in a Docker container,
+    captures logs/output, and performs audit verification based on container output.
+    """
+    loop = state["loop_count"]
+    print(f"🧪 [Tester] Deploying, running & testing code inside Docker container (Loop {loop})...", flush=True)
+
+    # Combine backend & frontend code to run/test
+    code_payload = f"{state.get('backend_logic', '')}\n\n{state.get('frontend_code', '')}"
+
+    # Determine execution language
+    language = "python"
+    if "node" in code_payload.lower() or "typescript" in state["prompt"].lower() or "javascript" in state["prompt"].lower():
+        language = "javascript"
+
+    # Execute container & capture logs
+    docker_logs = tool_run_in_docker(code_payload, language=language)
+    print(f"\n[=== DOCKER CONTAINER EXECUTION LOGS ===]\n{docker_logs}\n[=======================================]\n", flush=True)
+
+    system_prompt = get_prompt("dev_tester", specialty=state["specialty"])
+
+    user_content = (
+        f"ORIGINAL USER REQUEST:\n{state['prompt']}\n\n"
+        f"ARCHITECTURE:\n{state['architecture']}\n\n"
+        f"BACKEND LOGIC:\n{state['backend_logic']}\n\n"
+        f"FRONTEND CODE:\n{state['frontend_code']}\n\n"
+        f"ACTUAL CONTAINER EXECUTION LOGS & OUTPUT:\n{docker_logs}"
+    )
+
+    tester_review = _invoke_llm("dev_tester", system_prompt, user_content)
+    print(f"\n[=== TESTER REVIEW (Loop {loop}) ===]\n{tester_review}\n[=================================]\n", flush=True)
+
+    approved = "APPROVED" in tester_review.upper() and "REJECTED" not in tester_review.upper()
+    
+    combined_solution = (
+        f"### Architecture\n{state['architecture']}\n\n"
+        f"### Backend Logic\n{state['backend_logic']}\n\n"
+        f"### Frontend UI\n{state['frontend_code']}\n\n"
+        f"### Container Test Logs & Output\n```text\n{docker_logs}\n```\n\n"
+        f"### Tester Audit Verification\n{tester_review}"
+    )
+
+    # Automatically increment loop counter and append repair history when rejected
+    history = list(state.get("pipeline_history", []))
+    new_loop_count = state["loop_count"]
+    if not approved:
+        new_loop_count += 1
+        history.append(f"Tester Loop {state['loop_count']} Rejected:\nDocker Logs:\n{docker_logs}\nFeedback:\n{tester_review}")
+
+    return {
+        "approved": approved,
+        "loop_count": new_loop_count,
+        "pipeline_history": history,
+        "docker_logs": docker_logs,
+        "tester_feedback": f"Docker Execution Logs:\n{docker_logs}\n\nTester Audit:\n{tester_review}",
+        "critic_feedback": f"Docker Execution Logs:\n{docker_logs}\n\nTester Audit:\n{tester_review}",
+        "solution": combined_solution,
+    }
+
+
+# ─────────────────────────────────────────────
 # NODE: Sanitizer
 # ─────────────────────────────────────────────
 def sanitizer_node(state: PipelineState) -> dict:
@@ -238,7 +404,7 @@ def increment_loop_node(state: PipelineState) -> dict:
     """Appends critic feedback to history and bumps the loop counter."""
     history = list(state["pipeline_history"])
     history.append(
-        f"Attempt {state['loop_count']} Rejected.\nCritic Feedback:\n{state['critic_feedback']}"
+        f"Attempt {state['loop_count']} Rejected.\nFeedback:\n{state['critic_feedback']}"
     )
     return {
         "loop_count": state["loop_count"] + 1,
