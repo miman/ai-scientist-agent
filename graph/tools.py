@@ -88,7 +88,8 @@ def tool_run_in_docker(code_or_files: str, language: str = "python") -> str:
                 "WORKDIR /app\n"
                 "RUN npm install -g ts-node typescript\n"
                 "COPY . .\n"
-                "RUN npm install --production --prefer-offline --no-audit || true\n"
+                "RUN if [ -f package.json ]; then npm install --production --prefer-offline --no-audit || true; fi\n"
+                "RUN if [ -f package.json ] && (grep -q \"build\" package.json || grep -q \"build\" scripts); then npm run build || true; fi\n"
                 "CMD [\"npm\", \"start\"]\n"
             )
         elif "Dockerfile" in parsed_files and "npm ci" not in parsed_files["Dockerfile"]:

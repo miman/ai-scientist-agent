@@ -20,6 +20,9 @@ app = FastAPI(title="AI Adaptive Multi-Agent Problem Solver API (LangGraph)")
 DB_DIR = os.getenv("DB_DIR", "/app/db_data")
 DB_PATH = os.path.join(DB_DIR, "agent_archive.db")
 
+# Fetch MAX_LOOPS from environment variable with a default of 3
+MAX_LOOPS = int(os.getenv("MAX_LOOPS", 3))
+
 # In-memory tracking for active/completed runs
 LIVE_TRACKING: dict = {}
 
@@ -90,7 +93,7 @@ def run_pipeline_background(user_prompt: str, webhook_url: Optional[str] = None,
             "pipeline_type": pipeline_type,
             "specialty": "code" if pipeline_type == "dev_team" else "general",
             "loop_count": 1,
-            "max_loops": 5,
+            "max_loops": MAX_LOOPS,
             "pipeline_history": [],
             "research_log": [],
             "raw_search_data": None,
